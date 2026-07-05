@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APK Analyzer - Catch The Phish</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Playfair Display', serif;
+        }
+
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding: 1rem 0;
+            border-bottom: 2px solid #ff0000;
+        }
+
+        .logo-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            margin-bottom: 1rem;
+        }
+
+        .logo {
+            width: 240px;
+            height: auto;
+            object-fit: contain;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #ffffff;
+            text-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
+            margin: 0;
+        }
+
+        .upload-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .upload-area {
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            padding: 2rem;
+            margin: 1rem 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-area:hover {
+            border-color: #ff0000;
+            background: rgba(255, 0, 0, 0.1);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 1rem;
+        }
+
+        .upload-text {
+            color: #cccccc;
+            margin-bottom: 1rem;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .analyze-button {
+            background: #ff0000;
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 1rem;
+        }
+
+        .analyze-button:hover {
+            background: #cc0000;
+            transform: translateY(-2px);
+        }
+
+        .results-section {
+            display: none;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 2rem;
+            margin-top: 2rem;
+        }
+
+        .result-card {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .result-card h3 {
+            color: #ff0000;
+            margin-bottom: 1rem;
+        }
+
+        .result-list {
+            list-style: none;
+        }
+
+        .result-list li {
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+            padding-left: 1.5rem;
+            position: relative;
+            word-break: break-all;
+        }
+
+        .result-list li::before {
+            content: '•';
+            color: #ff0000;
+            position: absolute;
+            left: 0;
+        }
+
+        .navigation {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .nav-button {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            padding: 0.8rem 1.5rem;
+            color: #ffffff;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+        }
+
+        .nav-button:hover {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff0000;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 2rem 0;
+        }
+
+        .loading-spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: #ff0000;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo-container">
+                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" class="logo">
+                <h1>APK Analyzer</h1>
+            </div>
+        </header>
+
+        <div class="upload-section">
+            <div class="upload-area" id="dropZone">
+                <i class="fas fa-file-upload upload-icon"></i>
+                <p class="upload-text">Drag and drop your APK file here or click to browse</p>
+                <p class="file-name" id="fileName" style="display: none; color: #ff0000; margin-top: 10px;"></p>
+                <input type="file" class="file-input" id="fileInput" accept=".apk">
+            </div>
+            <button class="analyze-button" id="analyzeButton" disabled>Analyze APK</button>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="loading-spinner"></div>
+            <p>Analyzing APK...</p>
+        </div>
+
+        <div class="results-section" id="results">
+            <div class="result-card">
+                <h3>Basic Information</h3>
+                <ul class="result-list" id="basicInfo">
+                    <!-- Will be populated by JavaScript -->
+                </ul>
+            </div>
+
+            <div class="result-card">
+                <h3>Permissions</h3>
+                <ul class="result-list" id="permissions">
+                    <!-- Will be populated by JavaScript -->
+                </ul>
+            </div>
+
+            <div class="result-card">
+                <h3>Security Analysis</h3>
+                <ul class="result-list" id="securityAnalysis">
+                    <!-- Will be populated by JavaScript -->
+                </ul>
+            </div>
+
+            <div class="result-card">
+                <h3>Potential Risks</h3>
+                <ul class="result-list" id="risks">
+                    <!-- Will be populated by JavaScript -->
+                </ul>
+            </div>
+        </div>
+
+        <div class="navigation">
+            <a href="/" class="nav-button">
+                <i class="fas fa-arrow-left"></i>
+                Back to Scanner
+            </a>
+            <a href="/learn" class="nav-button">
+                <i class="fas fa-book"></i>
+                Learn About Phishing
+            </a>
+            <a href="/dashboard" class="nav-button">
+                <i class="fas fa-chart-line"></i>
+                View Analytics
+            </a>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+            const analyzeButton = document.getElementById('analyzeButton');
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+
+            // Handle drag and drop
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.style.borderColor = '#ff0000';
+                dropZone.style.backgroundColor = 'rgba(255, 0, 0, 0.1)';
+            });
+
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                dropZone.style.backgroundColor = 'transparent';
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                dropZone.style.backgroundColor = 'transparent';
+                
+                const file = e.dataTransfer.files[0];
+                if (file && file.name.endsWith('.apk')) {
+                    fileInput.files = e.dataTransfer.files;
+                    analyzeButton.disabled = false;
+                    
+                    // Show file name
+                    const fileName = document.getElementById('fileName');
+                    fileName.textContent = `Selected file: ${file.name}`;
+                    fileName.style.display = 'block';
+                } else {
+                    alert('Please select a valid APK file');
+                }
+            });
+
+            // Handle click to upload
+            dropZone.addEventListener('click', () => {
+                fileInput.click();
+            });
+
+            fileInput.addEventListener('change', () => {
+                if (fileInput.files.length > 0) {
+                    const file = fileInput.files[0];
+                    if (file.name.endsWith('.apk')) {
+                        analyzeButton.disabled = false;
+                        
+                        // Show file name
+                        const fileName = document.getElementById('fileName');
+                        fileName.textContent = `Selected file: ${file.name}`;
+                        fileName.style.display = 'block';
+                    } else {
+                        alert('Please select a valid APK file');
+                        fileInput.value = '';
+                        analyzeButton.disabled = true;
+                        document.getElementById('fileName').style.display = 'none';
+                    }
+                }
+            });
+
+            // Handle analyze button click
+            analyzeButton.addEventListener('click', async () => {
+                const file = fileInput.files[0];
+                if (!file) return;
+
+                loading.style.display = 'block';
+                results.style.display = 'none';
+
+                const formData = new FormData();
+                formData.append('apk', file);
+
+                try {
+                    const response = await fetch('/analyze_apk', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    // Update results
+                    updateResults(data);
+                    
+                    loading.style.display = 'none';
+                    results.style.display = 'block';
+                } catch (error) {
+                    console.error('Error:', error);
+                    loading.style.display = 'none';
+                    alert(`Error analyzing APK: ${error.message || 'Unknown error'}`);
+                }
+            });
+
+            function escapeHTML(str) {
+                if (typeof str !== 'string') {
+                    if (str === null || str === undefined) return '';
+                    str = String(str);
+                }
+                return str.replace(/[&<>'"]/g, 
+                    tag => ({
+                        '&': '&amp;',
+                        '<': '&lt;',
+                        '>': '&gt;',
+                        "'": '&#39;',
+                        '"': '&quot;'
+                    }[tag] || tag)
+                );
+            }
+
+            function updateResults(data) {
+                try {
+                    // Update Basic Information
+                    const basicInfo = document.getElementById('basicInfo');
+                    basicInfo.innerHTML = Object.entries(data.basic_info || {})
+                        .map(([key, value]) => `<li><strong>${escapeHTML(key)}:</strong> ${escapeHTML(value) || 'N/A'}</li>`)
+                        .join('');
+
+                    // Update Permissions
+                    const permissions = document.getElementById('permissions');
+                    permissions.innerHTML = (data.permissions || [])
+                        .map(perm => `<li>${escapeHTML(perm)}</li>`)
+                        .join('');
+
+                    // Update Security Analysis
+                    const securityAnalysis = document.getElementById('securityAnalysis');
+                    securityAnalysis.innerHTML = (data.security_analysis || [])
+                        .map(item => `<li>${escapeHTML(item)}</li>`)
+                        .join('');
+
+                    // Update Risks
+                    const risks = document.getElementById('risks');
+                    risks.innerHTML = (data.risks || [])
+                        .map(risk => `<li>${escapeHTML(risk)}</li>`)
+                        .join('');
+                } catch (error) {
+                    console.error('Error updating results:', error);
+                    alert('Error displaying results. Please try again.');
+                }
+            }
+        });
+    </script>
+</body>
+</html> 

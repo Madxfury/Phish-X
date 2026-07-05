@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catch The Phish</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+
+<body>
+    <!-- Hacking Preloader -->
+    <div id="hacker-preloader" class="preloader-overlay">
+        <div class="preloader-panel left-panel"></div>
+        <div class="preloader-panel right-panel"></div>
+        <div class="terminal-container">
+            <div class="terminal-header">
+                <span class="terminal-dot red"></span>
+                <span class="terminal-dot yellow"></span>
+                <span class="terminal-dot green"></span>
+                <span class="terminal-title">TERMINAL://CATCH_THE_PHISH_BOOT</span>
+            </div>
+            <div class="terminal-body" id="preloader-log">
+                <!-- Log content will be typed dynamically -->
+            </div>
+            <div class="scan-bar"></div>
+        </div>
+    </div>
+
+    <div class="layout-container">
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo">
+            </div>
+            <ul class="sidebar-menu">
+                <li>
+                    <a href="/">
+                        <i class="fas fa-home"></i>
+                        <span>Home</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/dashboard">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Analytics Dashboard</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/learn">
+                        <i class="fas fa-graduation-cap"></i>
+                        <span>Learn About Phishing</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/crawler">
+                        <i class="fas fa-spider"></i>
+                        <span>Live Crawler</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/apk_analyzer" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        <span>APK Analyzer</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/pdf_analyzer" class="nav-link">
+                        <i class="fas fa-book"></i>
+                        <span>PDF Analyzer</span>
+                    </a>
+                </li>
+            </ul>
+        </aside>
+        <button class="toggle-sidebar" onclick="toggleSidebar()">
+            <i class="fas fa-chevron-left"></i>
+        </button>
+
+        <div class="main-wrapper">
+            <div class="container">
+                <header class="header">
+                    <div class="logo-container">
+                        <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" class="logo">
+                        <h1 id="decrypt-title">Catch The Phish</h1>
+                    </div>
+                    <p class="subtitle">Advanced Phishing Detection & Security Analysis</p>
+                </header>
+
+                <main class="main-content">
+                    <section class="scan-section">
+                        <div class="input-container">
+                            <div class="url-input-wrapper">
+                                <i class="fas fa-globe input-icon"></i>
+                                <input type="text" id="urlInput"
+                                    placeholder="Enter URL to scan (e.g., https://example.com)" class="url-input">
+                                <button id="scanBtn" class="scan-button">
+                                    <i class="fas fa-shield-alt"></i>
+                                    Scan URL
+                                </button>
+                            </div>
+                            <div class="bulk-scan-section">
+                                <div class="bulk-input-wrapper">
+                                    <div id="bulkUrlContainer" class="bulk-url-container">
+                                        <div class="bulk-url-row">
+                                            <div class="bulk-url-input-wrapper">
+                                                <i class="fas fa-link bulk-input-icon"></i>
+                                                <input type="text" class="bulk-url-line" placeholder="Link 1">
+                                            </div>
+                                        </div>
+                                        <div class="bulk-url-row">
+                                            <div class="bulk-url-input-wrapper">
+                                                <i class="fas fa-link bulk-input-icon"></i>
+                                                <input type="text" class="bulk-url-line" placeholder="Link 2">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button id="bulkScanBtn" class="scan-button bulk-scan-btn-custom">
+                                        <div class="btn-text-content">
+                                            Bulk Scan
+                                        </div>
+                                        <img src="{{ url_for('static', filename='images/spider.png') }}" alt="Spider"
+                                            class="btn-spider-icon">
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="action-buttons">
+                                <button id="viewHistoryBtn" class="secondary-button">
+                                    <i class="fas fa-history"></i>
+                                    View Recent Scans
+                                </button>
+                                <button id="downloadReportBtn" class="secondary-button" disabled>
+                                    <i class="fas fa-file-pdf"></i>
+                                    Download Detailed Report
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="results-section" id="resultsSection" style="display: none;">
+                        <div class="loading-indicator" id="loadingIndicator">
+                            <div class="spinner"></div>
+                            <p>Analyzing website security...</p>
+                        </div>
+
+                        <div class="results-container" id="resultsContainer" style="display: none;">
+                            <div class="verdict-card">
+                                <div class="verdict-icon" id="verdictIcon">
+                                    <i class="fas fa-shield-alt"></i>
+                                </div>
+                                <h2 class="verdict-title" id="verdictTitle">Analysis Result</h2>
+                                <p class="verdict-text" id="verdictText">Analyzing...</p>
+                                <div class="verdict-actions">
+                                    <button id="downloadReportBtnInline" class="secondary-button" disabled>
+                                        <i class="fas fa-file-pdf"></i>
+                                        Get Detailed Security Report
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="bulk-results-section" id="bulkResultsSection" style="display: none;">
+                        <div class="bulk-results-container" id="bulkResultsContainer">
+                            <div class="bulk-summary">
+                                <h2>Bulk Scan Results</h2>
+                                <div class="summary-stats">
+                                    <div class="stat-card">
+                                        <i class="fas fa-globe"></i>
+                                        <span id="totalScanned">0</span>
+                                        <label>Total Scanned</label>
+                                    </div>
+                                    <div class="stat-card safe">
+                                        <i class="fas fa-check-circle"></i>
+                                        <span id="safeCount">0</span>
+                                        <label>Safe URLs</label>
+                                    </div>
+                                    <div class="stat-card suspicious">
+                                        <i class="fas fa-exclamation-triangle"></i>
+                                        <span id="suspiciousCount">0</span>
+                                        <label>Suspicious URLs</label>
+                                    </div>
+                                    <div class="stat-card error">
+                                        <i class="fas fa-times-circle"></i>
+                                        <span id="errorCount">0</span>
+                                        <label>Failed Scans</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="results-tabs">
+                                <button class="tab-button active" onclick="switchTab('results')">Results</button>
+                                <button class="tab-button" onclick="switchTab('errors')">Errors</button>
+                            </div>
+                            <div class="bulk-results-list" id="bulkResultsList"></div>
+                            <div class="bulk-errors-list" id="bulkErrorsList" style="display: none;"></div>
+                        </div>
+                    </section>
+
+                    <section class="history-section" id="historySection" style="display: none;">
+                        <h2>Recent Scans</h2>
+                        <div class="history-container" id="historyContainer"></div>
+                    </section>
+                </main>
+
+                <footer class="footer">
+                    <div class="footer-content">
+                        <p class="disclaimer">This tool is for educational purposes only. Always verify security
+                            manually.</p>
+                        <div class="footer-links">
+                            <a href="#" class="footer-link">Privacy Policy</a>
+                            <a href="#" class="footer-link">Terms of Service</a>
+                            <a href="#" class="footer-link">Contact</a>
+                        </div>
+                    </div>
+                </footer>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function formatResult(data) {
+            if (!data) return;
+
+            const verdictIcon = document.getElementById('verdictIcon');
+            const verdictTitle = document.getElementById('verdictTitle');
+            const verdictText = document.getElementById('verdictText');
+
+            // Update verdict display
+            if (data.risk_score >= 70) {
+                verdictIcon.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
+                verdictIcon.className = 'verdict-icon high-risk';
+                verdictTitle.textContent = 'High Risk Detected!';
+                verdictText.textContent = 'This website is likely a phishing attempt. Do not proceed.';
+            } else if (data.risk_score >= 40) {
+                verdictIcon.innerHTML = '<i class="fas fa-exclamation-circle"></i>';
+                verdictIcon.className = 'verdict-icon medium-risk';
+                verdictTitle.textContent = 'Suspicious Website';
+                verdictText.textContent = 'This website shows suspicious characteristics. Proceed with caution.';
+            } else {
+                verdictIcon.innerHTML = '<i class="fas fa-check-circle"></i>';
+                verdictIcon.className = 'verdict-icon safe';
+                verdictTitle.textContent = 'Website Appears Safe';
+                verdictText.textContent = 'No obvious phishing indicators detected.';
+            }
+
+            // Enable download buttons
+            document.getElementById('downloadReportBtn').disabled = false;
+            document.getElementById('downloadReportBtnInline').disabled = false;
+        }
+
+        function showLoading() {
+            document.getElementById('loadingIndicator').style.display = 'flex';
+            document.getElementById('resultsContainer').style.display = 'none';
+            document.getElementById('resultsSection').style.display = 'block';
+            document.getElementById('historySection').style.display = 'none';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingIndicator').style.display = 'none';
+            document.getElementById('resultsContainer').style.display = 'block';
+        }
+
+        function scanWebsite() {
+            const url = document.getElementById("urlInput").value.trim();
+
+            if (!url) {
+                alert("Please enter a URL");
+                return;
+            }
+
+            const formattedUrl = url.startsWith('http') ? url : `https://${url}`;
+
+            showLoading();
+
+            fetch('/index', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ url: formattedUrl })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    hideLoading();
+                    formatResult(data);
+                })
+                .catch(error => {
+                    hideLoading();
+                    console.error('Error:', error);
+                    document.getElementById("resultsContainer").innerHTML = `
+                    <div class="error-message">
+                        <i class="fas fa-exclamation-circle"></i>
+                        An error occurred while scanning the website.
+                    </div>
+                `;
+                });
+        }
+
+        function fetchData() {
+            showLoading();
+            document.getElementById('historySection').style.display = 'block';
+            document.getElementById('resultsSection').style.display = 'none';
+
+            fetch('/get_data')
+                .then(response => response.json())
+                .then(data => {
+                    hideLoading();
+                    if (data.data && data.data.length > 0) {
+                        const html = data.data.map(item => `
+                        <div class="history-item">
+                            <div class="url">${item.url}</div>
+                            <div class="status ${item.is_phishing ? 'phishing' : 'safe'}">
+                                ${item.is_phishing ? '⚠️ Suspicious' : '✅ Safe'}
+                            </div>
+                        </div>
+                    `).join('');
+                        document.getElementById("historyContainer").innerHTML = html;
+                    } else {
+                        document.getElementById("historyContainer").innerHTML = `
+                        <div class="no-data">
+                            <i class="fas fa-history"></i>
+                            No recent scans found
+                        </div>
+                    `;
+                    }
+                })
+                .catch(error => {
+                    hideLoading();
+                    console.error('Error:', error);
+                    document.getElementById("historyContainer").innerHTML = `
+                    <div class="error-message">
+                        <i class="fas fa-exclamation-circle"></i>
+                        Failed to fetch recent scans
+                    </div>
+                `;
+                });
+        }
+
+        function downloadReport() {
+            const url = document.getElementById('urlInput').value.trim();
+
+            if (!url) {
+                alert('Please enter a URL first.');
+                return;
+            }
+
+            const formattedUrl = url.startsWith('http') ? url : `https://${url}`;
+
+            showLoading();
+
+            fetch('/download_report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ url: formattedUrl })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Server error or invalid response.');
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    hideLoading();
+                    const link = document.createElement('a');
+                    const blobUrl = window.URL.createObjectURL(blob);
+                    link.href = blobUrl;
+                    link.download = "security_report.pdf";
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    window.URL.revokeObjectURL(blobUrl);
+                })
+                .catch(error => {
+                    hideLoading();
+                    console.error('Error:', error);
+                    document.getElementById("resultsContainer").innerHTML = `
+                    <div class="error-message">
+                        <i class="fas fa-exclamation-circle"></i>
+                        Failed to generate report
+                    </div>
+                `;
+                });
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            const mainWrapper = document.querySelector('.main-wrapper');
+            const toggleBtn = document.querySelector('.toggle-sidebar');
+            const toggleIcon = toggleBtn.querySelector('i');
+
+            sidebar.classList.toggle('collapsed');
+            mainWrapper.classList.toggle('expanded');
+            toggleBtn.classList.toggle('collapsed');
+
+            // Toggle the chevron icon
+            if (sidebar.classList.contains('collapsed')) {
+                toggleIcon.classList.remove('fa-chevron-left');
+                toggleIcon.classList.add('fa-chevron-right');
+            } else {
+                toggleIcon.classList.remove('fa-chevron-right');
+                toggleIcon.classList.add('fa-chevron-left');
+            }
+        }
+
+        function displayBulkResults(data) {
+            // Update summary stats
+            document.getElementById('totalScanned').textContent = data.total_scanned;
+            document.getElementById('safeCount').textContent = data.safe_count;
+            document.getElementById('suspiciousCount').textContent = data.suspicious_count;
+            document.getElementById('errorCount').textContent = data.failed_scans || 0;
+
+            // Display individual results
+            const resultsList = document.getElementById('bulkResultsList');
+            resultsList.innerHTML = data.results.map(result => `
+                <div class="result-item ${result.risk_score >= 40 ? 'suspicious' : 'safe'}">
+                    <div class="result-url">${result.url}</div>
+                    <div class="result-status ${result.risk_score >= 40 ? 'suspicious' : 'safe'}">
+                        <i class="fas ${result.risk_score >= 40 ? 'fa-exclamation-triangle' : 'fa-check-circle'}"></i>
+                        ${result.verdict}
+                    </div>
+                </div>
+            `).join('');
+
+            // Display errors if any
+            const errorsList = document.getElementById('bulkErrorsList');
+            if (data.errors && data.errors.length > 0) {
+                errorsList.innerHTML = data.errors.map(error => `
+                    <div class="result-item error-item">
+                        <div class="result-url">${error.url}</div>
+                        <div class="result-status error">
+                            <i class="fas fa-times-circle"></i>
+                            ${error.error}
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                errorsList.innerHTML = '<div class="no-errors">No errors occurred during scanning.</div>';
+            }
+        }
+
+        function switchTab(tab) {
+            const resultsList = document.getElementById('bulkResultsList');
+            const errorsList = document.getElementById('bulkErrorsList');
+            const buttons = document.querySelectorAll('.tab-button');
+
+            buttons.forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            if (tab === 'results') {
+                resultsList.style.display = 'grid';
+                errorsList.style.display = 'none';
+            } else {
+                resultsList.style.display = 'none';
+                errorsList.style.display = 'grid';
+            }
+        }
+
+        function bulkScan() {
+            const inputs = document.querySelectorAll('.bulk-url-line');
+            const urls = Array.from(inputs)
+                .map(input => input.value.trim())
+                .filter(url => url);
+
+            if (urls.length === 0) {
+                alert('Please enter at least one URL');
+                return;
+            }
+
+            showLoading();
+            document.getElementById('bulkResultsSection').style.display = 'block';
+
+            fetch('/bulk_scan', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ urls: urls })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    hideLoading();
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    displayBulkResults(data);
+                })
+                .catch(error => {
+                    hideLoading();
+                    console.error('Error:', error);
+                    document.getElementById('bulkResultsContainer').innerHTML = `
+                    <div class="error-message">
+                        <i class="fas fa-exclamation-circle"></i>
+                        ${error.message || 'An error occurred while scanning the URLs.'}
+                    </div>
+                `;
+                });
+        }
+
+        // Event Listeners
+        document.getElementById('scanBtn').addEventListener('click', scanWebsite);
+        document.getElementById('viewHistoryBtn').addEventListener('click', fetchData);
+        document.getElementById('downloadReportBtn').addEventListener('click', downloadReport);
+        document.getElementById('downloadReportBtnInline').addEventListener('click', downloadReport);
+        document.getElementById('bulkScanBtn').addEventListener('click', bulkScan);
+
+        function updateRowButtons() {
+            const container = document.getElementById('bulkUrlContainer');
+            if (!container) return;
+            const rows = container.querySelectorAll('.bulk-url-row');
+            
+            rows.forEach((row, index) => {
+                const input = row.querySelector('.bulk-url-line');
+                const num = index + 1;
+                input.placeholder = `Link ${num}`;
+                
+                // Clear existing actions
+                const existingActions = row.querySelector('.bulk-row-actions');
+                if (existingActions) {
+                    existingActions.remove();
+                }
+                
+                if (index >= 1) {
+                    // Link 2 onwards gets + and - buttons
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'bulk-row-actions';
+                    
+                    const addBtn = document.createElement('button');
+                    addBtn.type = 'button';
+                    addBtn.className = 'bulk-row-btn add-btn';
+                    addBtn.title = 'Add Link';
+                    addBtn.innerHTML = '<i class="fas fa-plus"></i>';
+                    addBtn.onclick = () => addRowAfter(index);
+                    
+                    const removeBtn = document.createElement('button');
+                    removeBtn.type = 'button';
+                    removeBtn.className = 'bulk-row-btn remove-btn';
+                    removeBtn.title = 'Remove Link';
+                    removeBtn.innerHTML = '<i class="fas fa-minus"></i>';
+                    removeBtn.onclick = () => removeRowAt(index);
+                    
+                    actionsDiv.appendChild(addBtn);
+                    actionsDiv.appendChild(removeBtn);
+                    row.appendChild(actionsDiv);
+                } else if (index === 0 && rows.length === 1) {
+                    // Link 1 gets a + button if it is the only row left so the user can add Link 2 back
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'bulk-row-actions';
+                    
+                    const addBtn = document.createElement('button');
+                    addBtn.type = 'button';
+                    addBtn.className = 'bulk-row-btn add-btn';
+                    addBtn.title = 'Add Link';
+                    addBtn.innerHTML = '<i class="fas fa-plus"></i>';
+                    addBtn.onclick = () => addRowAfter(index);
+                    
+                    actionsDiv.appendChild(addBtn);
+                    row.appendChild(actionsDiv);
+                }
+            });
+        }
+
+        function addRowAfter(index) {
+            const container = document.getElementById('bulkUrlContainer');
+            if (!container) return;
+            const rows = container.querySelectorAll('.bulk-url-row');
+            const targetRow = rows[index];
+            
+            const newRow = document.createElement('div');
+            newRow.className = 'bulk-url-row';
+            newRow.innerHTML = `
+                <div class="bulk-url-input-wrapper">
+                    <i class="fas fa-link bulk-input-icon"></i>
+                    <input type="text" class="bulk-url-line">
+                </div>
+            `;
+            
+            targetRow.after(newRow);
+            updateRowButtons();
+            newRow.querySelector('.bulk-url-line').focus();
+        }
+
+        function removeRowAt(index) {
+            const container = document.getElementById('bulkUrlContainer');
+            if (!container) return;
+            const rows = container.querySelectorAll('.bulk-url-row');
+            if (rows[index]) {
+                rows[index].remove();
+                updateRowButtons();
+            }
+        }
+
+        // Add enter key support for URL input
+        document.getElementById('urlInput').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                scanWebsite();
+            }
+        });
+        // Preloader script
+        document.addEventListener("DOMContentLoaded", function () {
+            // Initialize bulk scan input buttons
+            updateRowButtons();
+            
+            const preloader = document.getElementById("hacker-preloader");
+            const logContainer = document.getElementById("preloader-log");
+
+            const lines = [
+                { text: "INITIALIZING CATCH_THE_PHISH ENGINE v2.0...", type: "info" },
+                { text: "CONNECTING TO SECURE THREAT DATABASE...", type: "info" },
+                { text: "CHECKING DATABASE CONFIGURATION [MONGODB]...", type: "warning" },
+                { text: "CONNECTED TO DATABASE ATLAS CLOUD INTERFACE...", type: "success" },
+                { text: "MOUNTING LOGIC ROUTER & PARALLEL WORKERS...", type: "info" },
+                { text: "UPLOADING ANTIGRAVITY SECURITY DEFINITIONS...", type: "info" },
+                { text: "SYSTEM BOOT SEQUENCE: COMPLETED", type: "success" },
+                { text: "PHISH ARENA ACTIVE. THREAT SCANNING ENGAGED.", type: "success" }
+            ];
+
+            let currentLine = 0;
+
+            function typeLine() {
+                if (currentLine < lines.length) {
+                    const lineData = lines[currentLine];
+                    const div = document.createElement("div");
+                    div.className = `terminal-line ${lineData.type}`;
+                    logContainer.appendChild(div);
+
+                    let charIndex = 0;
+                    const text = lineData.text;
+
+                    function typeChar() {
+                        if (charIndex < text.length) {
+                            div.textContent += text[charIndex];
+                            charIndex++;
+                            setTimeout(typeChar, 10); // typing speed
+                        } else {
+                            currentLine++;
+                            setTimeout(typeLine, 150); // delay before next line
+                        }
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    }
+                    typeChar();
+                } else {
+                    // Trigger vault door transition
+                    setTimeout(() => {
+                        preloader.classList.add("animating-out");
+
+                        // Start title decryption animation
+                        startTitleDecryption();
+
+                        setTimeout(() => {
+                            preloader.classList.add("hidden");
+                            preloader.remove();
+                        }, 800);
+                    }, 800);
+                }
+            }
+
+            function startTitleDecryption() {
+                const titleEl = document.getElementById('decrypt-title');
+                if (!titleEl) return;
+
+                const originalText = "Catch The Phish";
+                const chars = "0123456789ABCDEF";
+                let iterations = 0;
+
+                const interval = setInterval(() => {
+                    titleEl.innerText = originalText
+                        .split("")
+                        .map((char, index) => {
+                            if (index < iterations) {
+                                return originalText[index];
+                            }
+                            if (char === " ") return " ";
+                            return chars[Math.floor(Math.random() * chars.length)];
+                        })
+                        .join("");
+
+                    if (iterations >= originalText.length) {
+                        clearInterval(interval);
+                        titleEl.innerText = originalText;
+                    }
+
+                    iterations += 1 / 6;
+                }, 40);
+            }
+
+            typeLine();
+        });
+    </script>
+</body>
+
+</html>
