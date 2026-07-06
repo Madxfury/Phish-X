@@ -19,12 +19,7 @@ import time
 from pymongo import MongoClient
 from werkzeug.utils import secure_filename
 import zipfile
-import PyPDF2
-import fitz  # PyMuPDF
 import xml.etree.ElementTree as ET
-from androguard.core.bytecodes.apk import APK
-from androguard.core.bytecodes.dvm import DalvikVMFormat
-from androguard.core.analysis.analysis import Analysis
 from features_extract import (
     extract_url_features,
     extract_keyword_features,
@@ -48,6 +43,7 @@ from functools import partial, lru_cache
 from urllib.parse import urlparse
 import sqlite3
 from contextlib import contextmanager
+
 
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
@@ -965,6 +961,9 @@ def analyze_apk():
         try:
             print("Starting APK analysis")
             # Analyze APK
+            from androguard.core.bytecodes.apk import APK
+            from androguard.core.bytecodes.dvm import DalvikVMFormat
+            from androguard.core.analysis.analysis import Analysis
             a = APK(filepath)
             print("APK loaded successfully")
             d = DalvikVMFormat(a.get_dex())
@@ -1111,6 +1110,8 @@ def analyze_pdf():
         
         try:
             print("Starting PDF analysis")
+            import PyPDF2
+            import fitz
             results = {
                 'basic_info': {},
                 'security_analysis': [],
