@@ -514,37 +514,37 @@
             const container = document.getElementById('bulkUrlContainer');
             if (!container) return;
             const rows = container.querySelectorAll('.bulk-url-row');
-            
+
             rows.forEach((row, index) => {
                 const input = row.querySelector('.bulk-url-line');
                 const num = index + 1;
                 input.placeholder = `Link ${num}`;
-                
+
                 // Clear existing actions
                 const existingActions = row.querySelector('.bulk-row-actions');
                 if (existingActions) {
                     existingActions.remove();
                 }
-                
+
                 if (index >= 1) {
                     // Link 2 onwards gets + and - buttons
                     const actionsDiv = document.createElement('div');
                     actionsDiv.className = 'bulk-row-actions';
-                    
+
                     const addBtn = document.createElement('button');
                     addBtn.type = 'button';
                     addBtn.className = 'bulk-row-btn add-btn';
                     addBtn.title = 'Add Link';
                     addBtn.innerHTML = '<i class="fas fa-plus"></i>';
                     addBtn.onclick = () => addRowAfter(index);
-                    
+
                     const removeBtn = document.createElement('button');
                     removeBtn.type = 'button';
                     removeBtn.className = 'bulk-row-btn remove-btn';
                     removeBtn.title = 'Remove Link';
                     removeBtn.innerHTML = '<i class="fas fa-minus"></i>';
                     removeBtn.onclick = () => removeRowAt(index);
-                    
+
                     actionsDiv.appendChild(addBtn);
                     actionsDiv.appendChild(removeBtn);
                     row.appendChild(actionsDiv);
@@ -552,14 +552,14 @@
                     // Link 1 gets a + button if it is the only row left so the user can add Link 2 back
                     const actionsDiv = document.createElement('div');
                     actionsDiv.className = 'bulk-row-actions';
-                    
+
                     const addBtn = document.createElement('button');
                     addBtn.type = 'button';
                     addBtn.className = 'bulk-row-btn add-btn';
                     addBtn.title = 'Add Link';
                     addBtn.innerHTML = '<i class="fas fa-plus"></i>';
                     addBtn.onclick = () => addRowAfter(index);
-                    
+
                     actionsDiv.appendChild(addBtn);
                     row.appendChild(actionsDiv);
                 }
@@ -571,7 +571,7 @@
             if (!container) return;
             const rows = container.querySelectorAll('.bulk-url-row');
             const targetRow = rows[index];
-            
+
             const newRow = document.createElement('div');
             newRow.className = 'bulk-url-row';
             newRow.innerHTML = `
@@ -580,7 +580,7 @@
                     <input type="text" class="bulk-url-line">
                 </div>
             `;
-            
+
             targetRow.after(newRow);
             updateRowButtons();
             newRow.querySelector('.bulk-url-line').focus();
@@ -606,7 +606,7 @@
         document.addEventListener("DOMContentLoaded", function () {
             // Initialize bulk scan input buttons
             updateRowButtons();
-            
+
             const preloader = document.getElementById("hacker-preloader");
             const logContainer = document.getElementById("preloader-log");
 

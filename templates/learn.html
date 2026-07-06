@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,7 +13,7 @@
             padding: 0;
             box-sizing: border-box;
             font-family: 'Playfair Display', serif;
-        
+
         }
 
         body {
@@ -90,7 +91,8 @@
             transform: rotateY(180deg);
         }
 
-        .flashcard-front, .flashcard-back {
+        .flashcard-front,
+        .flashcard-back {
             position: absolute;
             width: 100%;
             height: 100%;
@@ -138,12 +140,10 @@
             left: -100%;
             width: 100%;
             height: 100%;
-            background: linear-gradient(
-                90deg,
-                transparent,
-                rgba(255, 255, 255, 0.2),
-                transparent
-            );
+            background: linear-gradient(90deg,
+                    transparent,
+                    rgba(255, 255, 255, 0.2),
+                    transparent);
             transition: 0.5s;
         }
 
@@ -287,9 +287,17 @@
         }
 
         @keyframes pulse {
-            0% { opacity: 0.6; }
-            50% { opacity: 1; }
-            100% { opacity: 0.6; }
+            0% {
+                opacity: 0.6;
+            }
+
+            50% {
+                opacity: 1;
+            }
+
+            100% {
+                opacity: 0.6;
+            }
         }
 
         .flashcard.flipped .click-indicator {
@@ -303,6 +311,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <header class="header">
@@ -330,7 +339,8 @@
                     <div class="flashcard-back">
                         <h3 class="flashcard-title">Email Phishing</h3>
                         <p class="flashcard-content">
-                            Email phishing is a type of cyber attack where attackers send fraudulent emails that appear to be from legitimate sources to trick recipients into revealing sensitive information.
+                            Email phishing is a type of cyber attack where attackers send fraudulent emails that appear
+                            to be from legitimate sources to trick recipients into revealing sensitive information.
                         </p>
                         <div class="flashcard-tip">
                             <h4>How to Protect Yourself:</h4>
@@ -360,7 +370,8 @@
                     <div class="flashcard-back">
                         <h3 class="flashcard-title">Spear Phishing</h3>
                         <p class="flashcard-content">
-                            Spear phishing is a targeted form of phishing where attackers customize their messages for specific individuals or organizations, making them more convincing.
+                            Spear phishing is a targeted form of phishing where attackers customize their messages for
+                            specific individuals or organizations, making them more convincing.
                         </p>
                         <div class="flashcard-tip">
                             <h4>How to Protect Yourself:</h4>
@@ -390,7 +401,8 @@
                     <div class="flashcard-back">
                         <h3 class="flashcard-title">Clone Phishing</h3>
                         <p class="flashcard-content">
-                            Clone phishing involves creating a nearly identical copy of a legitimate email, but with malicious links or attachments, often sent from a spoofed address.
+                            Clone phishing involves creating a nearly identical copy of a legitimate email, but with
+                            malicious links or attachments, often sent from a spoofed address.
                         </p>
                         <div class="flashcard-tip">
                             <h4>How to Protect Yourself:</h4>
@@ -420,7 +432,8 @@
                     <div class="flashcard-back">
                         <h3 class="flashcard-title">Whaling</h3>
                         <p class="flashcard-content">
-                            Whaling is a type of phishing attack that specifically targets high-profile individuals like executives or senior management to steal sensitive information or money.
+                            Whaling is a type of phishing attack that specifically targets high-profile individuals like
+                            executives or senior management to steal sensitive information or money.
                         </p>
                         <div class="flashcard-tip">
                             <h4>How to Protect Yourself:</h4>
@@ -450,7 +463,8 @@
                     <div class="flashcard-back">
                         <h3 class="flashcard-title">Vishing (Voice Phishing)</h3>
                         <p class="flashcard-content">
-                            Vishing is a type of phishing attack conducted over phone calls, where attackers impersonate legitimate organizations to steal sensitive information.
+                            Vishing is a type of phishing attack conducted over phone calls, where attackers impersonate
+                            legitimate organizations to steal sensitive information.
                         </p>
                         <div class="flashcard-details">
                             <h4>Common Tactics:</h4>
@@ -470,7 +484,8 @@
                         </div>
                         <div class="flashcard-example">
                             <h4>Example:</h4>
-                            <p>"This is your bank's security department. We've detected suspicious activity on your account. Please verify your account number and PIN."</p>
+                            <p>"This is your bank's security department. We've detected suspicious activity on your
+                                account. Please verify your account number and PIN."</p>
                         </div>
                     </div>
                 </div>
@@ -493,7 +508,8 @@
                     <div class="flashcard-back">
                         <h3 class="flashcard-title">Smishing (SMS Phishing)</h3>
                         <p class="flashcard-content">
-                            Smishing is a type of phishing attack conducted through text messages, where attackers send fraudulent SMS messages to trick recipients into revealing sensitive information.
+                            Smishing is a type of phishing attack conducted through text messages, where attackers send
+                            fraudulent SMS messages to trick recipients into revealing sensitive information.
                         </p>
                         <div class="flashcard-details">
                             <h4>Common Tactics:</h4>
@@ -534,16 +550,16 @@
 
     <script>
         // Wait for the DOM to be fully loaded
-        window.addEventListener('load', function() {
+        window.addEventListener('load', function () {
             console.log('Page loaded, initializing flashcards...');
-            
+
             // Get all flashcard elements
             const flashcards = document.querySelectorAll('.flashcard');
             console.log('Found flashcards:', flashcards.length);
-            
+
             // Add click event listener to each flashcard
             flashcards.forEach((card, index) => {
-                card.addEventListener('click', function(e) {
+                card.addEventListener('click', function (e) {
                     console.log('Card clicked:', index);
                     this.classList.toggle('flipped');
                 });
@@ -551,7 +567,7 @@
         });
 
         // Alternative click handler using event delegation
-        document.addEventListener('click', function(e) {
+        document.addEventListener('click', function (e) {
             const card = e.target.closest('.flashcard');
             if (card) {
                 console.log('Card clicked through delegation');
@@ -560,4 +576,5 @@
         });
     </script>
 </body>
-</html> 
+
+</html>

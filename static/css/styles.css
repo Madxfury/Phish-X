@@ -358,10 +358,39 @@ h1 {
 
     .url-input-wrapper {
         flex-direction: column;
+        align-items: stretch !important;
+        background-color: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+        gap: 0.8rem !important;
+    }
+
+    .url-input-wrapper .input-icon {
+        display: none;
+    }
+
+    .url-input {
+        background-color: rgba(255, 255, 255, 0.1) !important;
+        border: 1px solid rgba(255, 0, 0, 0.3) !important;
+        border-radius: 10px !important;
+        padding: 0.8rem 1rem !important;
+        width: 100% !important;
+    }
+
+    .scan-button {
+        width: 100% !important;
+        padding: 0.8rem !important;
+        justify-content: center !important;
     }
 
     .action-buttons {
         flex-direction: column;
+        width: 100%;
+    }
+
+    .action-buttons button {
+        width: 100% !important;
+        justify-content: center !important;
     }
 
     .verdict-card {
@@ -379,6 +408,23 @@ h1 {
     .footer-links {
         flex-direction: column;
         gap: 1rem;
+    }
+
+    .bulk-input-wrapper {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .bulk-scan-btn-custom {
+        width: 100% !important;
+        height: 50px !important;
+        flex-direction: row !important;
+        justify-content: center !important;
+        align-items: center !important;
+    }
+
+    .btn-spider-icon {
+        width: 25px !important;
     }
 }
 
@@ -541,30 +587,75 @@ h1 {
 
 @media (max-width: 768px) {
     .sidebar {
-        width: 60px;
-        padding: 1rem 0.5rem;
+        position: fixed;
+        width: 250px;
+        height: 100vh;
+        left: 0;
+        top: 0;
+        transform: translateX(0);
+        transition: transform 0.3s cubic-bezier(0.77, 0, 0.175, 1);
+        z-index: 1002;
+        background: rgba(10, 10, 10, 0.98);
+        backdrop-filter: blur(10px);
+        box-shadow: 5px 0 25px rgba(0, 0, 0, 0.5);
+        padding: 2rem 1rem;
+    }
+
+    .sidebar.collapsed {
+        transform: translateX(-100%);
+        width: 250px;
     }
 
     .sidebar-logo h2,
     .sidebar-menu span {
-        display: none;
+        display: inline-block !important;
+        opacity: 1 !important;
     }
 
     .sidebar-menu a {
-        justify-content: center;
-        padding: 0.8rem;
+        justify-content: flex-start !important;
+        padding: 0.8rem 1rem !important;
     }
 
     .sidebar-menu i {
-        margin-right: 0;
+        margin-right: 0.8rem !important;
+    }
+
+    .sidebar-logo img {
+        max-width: 180px !important;
+        width: 85% !important;
     }
 
     .main-wrapper {
-        margin-left: 60px;
+        margin-left: 0 !important;
+        padding: 5rem 1rem 1rem 1rem !important;
     }
 
     .toggle-sidebar {
-        display: none;
+        display: flex !important;
+        position: fixed;
+        left: 20px;
+        top: 20px;
+        transform: none;
+        width: 45px;
+        height: 45px;
+        background: rgba(0, 0, 0, 0.9);
+        border: 1px solid rgba(255, 0, 0, 0.4);
+        border-radius: 50%;
+        align-items: center;
+        justify-content: center;
+        color: #ffffff;
+        box-shadow: 0 4px 15px rgba(255, 0, 0, 0.2);
+        z-index: 1005;
+        transition: all 0.3s cubic-bezier(0.77, 0, 0.175, 1);
+    }
+
+    .toggle-sidebar.collapsed {
+        left: 20px !important;
+    }
+
+    .toggle-sidebar:not(.collapsed) {
+        left: 270px !important;
     }
 }
 

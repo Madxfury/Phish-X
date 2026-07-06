@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -172,6 +173,7 @@
                 opacity: 0;
                 transform: translateY(20px);
             }
+
             to {
                 opacity: 1;
                 transform: translateY(0);
@@ -250,8 +252,13 @@
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         /* Responsive Design */
@@ -270,6 +277,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <header class="header">
@@ -332,7 +340,7 @@
             transports: ['websocket', 'polling'],
             timeout: 5000
         });
-        
+
         let stats = {
             total: 0,
             safe: 0,
@@ -355,7 +363,7 @@
             displayedUrls.add(result.url);
 
             const container = document.getElementById('results-container');
-            
+
             // Remove loading spinner when first result arrives
             const loading = document.querySelector('.loading');
             if (loading) {
@@ -364,7 +372,7 @@
 
             const resultDiv = document.createElement('div');
             resultDiv.className = `crawl-result ${result.is_phishing === '1' ? 'phishing' : 'safe'}`;
-            
+
             resultDiv.innerHTML = `
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
@@ -377,9 +385,9 @@
                 </div>
                 <div class="timestamp">${result.timestamp}</div>
             `;
-            
+
             container.insertBefore(resultDiv, container.firstChild);
-            
+
             // Update stats
             stats.total++;
             if (result.is_phishing === '1') {
@@ -390,7 +398,7 @@
             updateStats();
         }
 
-        socket.on('crawl_result', function(result) {
+        socket.on('crawl_result', function (result) {
             addResult(result);
         });
 
@@ -420,9 +428,10 @@
                 }
             }, 3000);
         }
-        
+
         // Start polling immediately as a fallback channel
         startFallbackPolling();
     </script>
 </body>
-</html> 
+
+</html>

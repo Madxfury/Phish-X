@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -193,7 +194,9 @@
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         @media (max-width: 768px) {
@@ -203,6 +206,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <header class="header">
@@ -274,7 +278,7 @@
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function () {
             const dropZone = document.getElementById('dropZone');
             const fileInput = document.getElementById('fileInput');
             const analyzeButton = document.getElementById('analyzeButton');
@@ -297,12 +301,12 @@
                 e.preventDefault();
                 dropZone.style.borderColor = 'rgba(255, 255, 255, 0.2)';
                 dropZone.style.backgroundColor = 'transparent';
-                
+
                 const file = e.dataTransfer.files[0];
                 if (file && file.name.endsWith('.apk')) {
                     fileInput.files = e.dataTransfer.files;
                     analyzeButton.disabled = false;
-                    
+
                     // Show file name
                     const fileName = document.getElementById('fileName');
                     fileName.textContent = `Selected file: ${file.name}`;
@@ -322,7 +326,7 @@
                     const file = fileInput.files[0];
                     if (file.name.endsWith('.apk')) {
                         analyzeButton.disabled = false;
-                        
+
                         // Show file name
                         const fileName = document.getElementById('fileName');
                         fileName.textContent = `Selected file: ${file.name}`;
@@ -354,14 +358,14 @@
                     });
 
                     const data = await response.json();
-                    
+
                     if (data.error) {
                         throw new Error(data.error);
                     }
-                    
+
                     // Update results
                     updateResults(data);
-                    
+
                     loading.style.display = 'none';
                     results.style.display = 'block';
                 } catch (error) {
@@ -376,7 +380,7 @@
                     if (str === null || str === undefined) return '';
                     str = String(str);
                 }
-                return str.replace(/[&<>'"]/g, 
+                return str.replace(/[&<>'"]/g,
                     tag => ({
                         '&': '&amp;',
                         '<': '&lt;',
@@ -420,4 +424,5 @@
         });
     </script>
 </body>
-</html> 
+
+</html>
