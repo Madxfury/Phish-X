@@ -118,7 +118,7 @@ crawl_results = queue.Queue()
 # Favicon route
 @app.route('/favicon.ico')
 def favicon():
-    return send_file(os.path.join(app.root_path, 'static', 'images', 'logo.png'), mimetype='image/png')
+    return send_file(os.path.join(app.root_path, 'static', 'images', 'favicon1.png'), mimetype='image/png')
 
 # Home route
 @app.route('/')

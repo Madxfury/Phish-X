@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/favicon.ico",
-      "destination": "/static/images/logo.png"
+      "destination": "/static/images/favicon1.png"
     },
     {
       "source": "/(.*)",
