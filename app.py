@@ -219,25 +219,43 @@ def download_report():
                 self.set_fill_color(0, 0, 0)
                 self.rect(0, 0, self.w, self.h, 'F')
                 
-                # Add logo
-                try:
-                    self.image('static/images/logo.png', 10, 8, 33)
-                except:
-                    pass  # Continue if logo not found
-                
-                # Add decorative line
-                self.set_draw_color(255, 0, 0)
-                self.set_line_width(0.5)
-                self.line(10, 45, self.w - 10, 45)
-                
-                self.set_text_color(255, 255, 255)  # White color for header
-                self.set_font('Arial', 'B', 24)
-                self.cell(0, 20, 'Website Security Report', 0, 1, 'C')
-                
-                # Add timestamp
-                self.set_font('Arial', 'I', 10)
-                self.cell(0, 10, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', 0, 1, 'C')
-                self.ln(10)
+                if self.page_no() == 1:
+                    # Add logo
+                    try:
+                        self.image('static/images/logo.png', 10, 8, 33)
+                    except:
+                        pass  # Continue if logo not found
+                    
+                    # Add decorative line
+                    self.set_draw_color(255, 0, 0)
+                    self.set_line_width(0.5)
+                    self.line(10, 45, self.w - 10, 45)
+                    
+                    self.set_text_color(255, 255, 255)  # White color for header
+                    self.set_font('Arial', 'B', 24)
+                    self.cell(0, 20, 'Website Security Report', 0, 1, 'C')
+                    
+                    # Add timestamp
+                    self.set_font('Arial', 'I', 10)
+                    self.cell(0, 10, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', 0, 1, 'C')
+                    self.ln(10)
+                else:
+                    # Compact header for page 2+
+                    try:
+                        self.image('static/images/logo.png', 10, 5, 20)
+                    except:
+                        pass
+                    
+                    self.set_draw_color(255, 0, 0)
+                    self.set_line_width(0.3)
+                    self.line(10, 18, self.w - 10, 18)
+                    
+                    self.set_text_color(255, 255, 255)
+                    self.set_font('Arial', 'B', 10)
+                    # Right-aligned title
+                    self.set_y(5)
+                    self.cell(0, 10, 'Website Security Report (Continued)', 0, 1, 'R')
+                    self.set_y(22)  # Reset y position below the running header
 
             def footer(self):
                 self.set_y(-15)
@@ -272,7 +290,13 @@ def download_report():
                     self.ln()
 
             def section_title(self, title):
-                self.ln(5)
+                # Check remaining space. If less than 50mm, start a new page
+                remaining_space = self.h - self.get_y() - 15
+                if remaining_space < 50:
+                    self.add_page()
+                else:
+                    self.ln(5)
+                
                 self.set_text_color(255, 255, 255)  # White color
                 self.set_font('Arial', 'B', 14)
                 self.cell(0, 10, title, 0, 1, 'L')
