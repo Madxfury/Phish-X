@@ -1,4 +1,6 @@
-# Catch The Phish 🎣
+# Catch The Phish 🕷️
+
+<img width="1352" height="668" alt="image" src="https://github.com/user-attachments/assets/c90e844f-00f1-4065-8f58-932d4c350e1d" />
 
 An AI-powered phishing detection web app built with Flask. Scan URLs, analyze PDFs & APKs, view a live threat dashboard, and learn about phishing attacks.
 
