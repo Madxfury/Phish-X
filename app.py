@@ -115,6 +115,11 @@ mock_db = [
 # Queue for storing crawling results
 crawl_results = queue.Queue()
 
+# Favicon route
+@app.route('/favicon.ico')
+def favicon():
+    return send_file(os.path.join(app.root_path, 'static', 'images', 'logo.png'), mimetype='image/png')
+
 # Home route
 @app.route('/')
 def home():

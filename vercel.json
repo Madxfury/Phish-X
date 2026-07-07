@@ -2,6 +2,10 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/favicon.ico",
+      "destination": "/static/images/logo.png"
+    },
+    {
       "source": "/(.*)",
       "destination": "/app.py"
     }
