@@ -226,6 +226,19 @@
             const verdictTitle = document.getElementById('verdictTitle');
             const verdictText = document.getElementById('verdictText');
 
+            // Handle API or backend scan errors
+            if (data.error || typeof data.risk_score === 'undefined') {
+                verdictIcon.innerHTML = '<i class="fas fa-exclamation-circle"></i>';
+                verdictIcon.className = 'verdict-icon high-risk';
+                verdictTitle.textContent = 'Scan Error';
+                verdictText.textContent = data.error || 'An unexpected error occurred during analysis.';
+                
+                // Disable download buttons
+                document.getElementById('downloadReportBtn').disabled = true;
+                document.getElementById('downloadReportBtnInline').disabled = true;
+                return;
+            }
+
             // Update verdict display
             if (data.risk_score >= 70) {
                 verdictIcon.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';

@@ -245,7 +245,7 @@ def check_spf_dmarc(domain):
             if txt.to_text().startswith('"v=spf1'):
                 spf_present = 1
                 break
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+    except Exception as e:
         spf_present = 0
     
     try:
@@ -255,7 +255,7 @@ def check_spf_dmarc(domain):
             if txt.to_text().startswith('"v=DMARC1'):
                 dmarc_present = 1
                 break
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+    except Exception as e:
         dmarc_present = 0
     
     return {'spf_present': spf_present, 'dmarc_present': dmarc_present}
@@ -305,7 +305,7 @@ def extract_redirection_count(url):
             'redirection_count': redirection_count,
             'final_domain': final_url.split('/')[2] if '//' in final_url else final_url
         }
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"Request Error: {e}")
         return {
             'redirection_count': -1,
@@ -388,7 +388,7 @@ def get_certificate_info(url):
                     'is_self_signed': int(is_self_signed)
                 }
 
-    except (socket.timeout, ssl.SSLError, ssl.CertificateError, socket.gaierror, ConnectionResetError) as e:
+    except Exception as e:
         return {
             'cert_issuer': f'Error: {str(e)}',
             'cert_validity_days': 0,
