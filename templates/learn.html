@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Learn About Phishing - Catch The Phish</title>
+    <title>Learn About Phishing - Phish-X AI</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon1.png') }}">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -311,6 +311,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/focus.css') }}">
 </head>
 
 <body>
@@ -324,7 +325,7 @@
 
         <div class="flashcards-container">
             <!-- Email Phishing -->
-            <div class="flashcard" onclick="this.classList.toggle('flipped')">
+            <div class="flashcard" role="button" tabindex="0" aria-label="Flip phishing education card">
                 <div class="flashcard-inner">
                     <div class="flashcard-front">
                         <div class="flashcard-image">
@@ -355,7 +356,7 @@
             </div>
 
             <!-- Spear Phishing -->
-            <div class="flashcard" onclick="this.classList.toggle('flipped')">
+            <div class="flashcard" role="button" tabindex="0" aria-label="Flip phishing education card">
                 <div class="flashcard-inner">
                     <div class="flashcard-front">
                         <div class="flashcard-image">
@@ -386,7 +387,7 @@
             </div>
 
             <!-- Clone Phishing -->
-            <div class="flashcard" onclick="this.classList.toggle('flipped')">
+            <div class="flashcard" role="button" tabindex="0" aria-label="Flip phishing education card">
                 <div class="flashcard-inner">
                     <div class="flashcard-front">
                         <div class="flashcard-image">
@@ -417,7 +418,7 @@
             </div>
 
             <!-- Whaling -->
-            <div class="flashcard" onclick="this.classList.toggle('flipped')">
+            <div class="flashcard" role="button" tabindex="0" aria-label="Flip phishing education card">
                 <div class="flashcard-inner">
                     <div class="flashcard-front">
                         <div class="flashcard-image">
@@ -448,7 +449,7 @@
             </div>
 
             <!-- Vishing -->
-            <div class="flashcard" onclick="this.classList.toggle('flipped')">
+            <div class="flashcard" role="button" tabindex="0" aria-label="Flip phishing education card">
                 <div class="flashcard-inner">
                     <div class="flashcard-front">
                         <div class="flashcard-image">
@@ -493,7 +494,7 @@
             </div>
 
             <!-- Smishing -->
-            <div class="flashcard" onclick="this.classList.toggle('flipped')">
+            <div class="flashcard" role="button" tabindex="0" aria-label="Flip phishing education card">
                 <div class="flashcard-inner">
                     <div class="flashcard-front">
                         <div class="flashcard-image">
@@ -550,32 +551,11 @@
     </div>
 
     <script>
-        // Wait for the DOM to be fully loaded
-        window.addEventListener('load', function () {
-            console.log('Page loaded, initializing flashcards...');
-
-            // Get all flashcard elements
-            const flashcards = document.querySelectorAll('.flashcard');
-            console.log('Found flashcards:', flashcards.length);
-
-            // Add click event listener to each flashcard
-            flashcards.forEach((card, index) => {
-                card.addEventListener('click', function (e) {
-                    console.log('Card clicked:', index);
-                    this.classList.toggle('flipped');
-                });
-            });
-        });
-
-        // Alternative click handler using event delegation
-        document.addEventListener('click', function (e) {
-            const card = e.target.closest('.flashcard');
-            if (card) {
-                console.log('Card clicked through delegation');
-                card.classList.toggle('flipped');
-            }
+        document.querySelectorAll('.flashcard').forEach(card => {
+            const flip = () => { card.classList.toggle('flipped'); card.setAttribute('aria-pressed', card.classList.contains('flipped')); };
+            card.addEventListener('click', flip);
+            card.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); flip(); } });
         });
     </script>
 </body>
-
 </html>

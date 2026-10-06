@@ -1,6 +1,8 @@
 # Local environment variables
 .env
-.env.local
+.env.*
+!.env.example
+.vercel/
 
 # Python cache
 __pycache__/
@@ -29,3 +31,13 @@ myscrappy/
 venv/
 .venv/
 env/
+
+# Actual local scan history and generated Vercel assets
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+public/static/
+.coverage
+.vercel
+.env*

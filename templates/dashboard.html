@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Catch The Phish - CXO Dashboard</title>
+    <title>Phish-X AI - CXO Dashboard</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon1.png') }}">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -139,6 +139,7 @@
 
         /* Table Styles */
         .table-container {
+            overflow-x: auto;
             background: rgba(255, 255, 255, 0.05);
             border-radius: 15px;
             padding: 1.5rem;
@@ -176,6 +177,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/focus.css') }}">
 </head>
 
 <body>
@@ -183,11 +185,11 @@
         <header class="header">
             <div class="logo-container">
                 <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" class="logo">
-                <h1>Catch The Phish</h1>
+                <h1>Phish-X AI</h1>
             </div>
             <nav class="navbar navbar-expand-lg">
                 <div class="container">
-                    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle page navigation">
                         <span class="navbar-toggler-icon"></span>
                     </button>
                     <div class="collapse navbar-collapse" id="navbarNav">
@@ -204,6 +206,7 @@
             </nav>
         </header>
 
+        <p>Storage: {{ storage_mode }} · {{ unknown_sites }} scans with insufficient evidence · {{ partial_sites }} incomplete scans. Trends use UTC scan dates.</p>
         <!-- Key Metrics -->
         <div class="row">
             <div class="col-md-3">
@@ -213,37 +216,37 @@
                         Total Sites Scanned
                     </div>
                     <div class="metric-value">{{ total_sites }}</div>
-                    <div class="metric-label">All time scanned websites</div>
+                    <div class="metric-label">Stored scan records (up to 10,000)</div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="dashboard-card">
                     <div class="card-title">
                         <i class="fas fa-shield-alt"></i>
-                        Safe Sites
+                        Low Observed Risk
                     </div>
                     <div class="metric-value">{{ safe_sites }}</div>
-                    <div class="metric-label">Verified legitimate websites</div>
+                    <div class="metric-label">Inspected pages with low observed risk</div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="dashboard-card">
                     <div class="card-title">
                         <i class="fas fa-exclamation-triangle"></i>
-                        Phishing Sites
+                        Elevated Observed Risk
                     </div>
                     <div class="metric-value">{{ phishing_sites }}</div>
-                    <div class="metric-label">Detected phishing attempts</div>
+                    <div class="metric-label">Scans with elevated evidence scores</div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="dashboard-card">
                     <div class="card-title">
                         <i class="fas fa-percentage"></i>
-                        Phishing Rate
+                        Elevated Risk Rate
                     </div>
                     <div class="metric-value">{{ phishing_rate }}%</div>
-                    <div class="metric-label">Percentage of phishing sites</div>
+                    <div class="metric-label">Percentage with elevated observed risk</div>
                 </div>
             </div>
         </div>
@@ -274,11 +277,11 @@
             </div>
         </div>
 
-        <!-- Top Phishing Domains -->
+        <!-- Highest Observed Risk URLs -->
         <div class="dashboard-card">
             <div class="card-title">
                 <i class="fas fa-list"></i>
-                Top Phishing Domains
+                Highest Observed Risk URLs
             </div>
             <div class="table-container">
                 <table class="table">
@@ -286,7 +289,7 @@
                         <tr>
                             <th>Domain</th>
                             <th>Detection Date</th>
-                            <th>Confidence Score</th>
+                            <th>Risk Score</th>
                             <th>Status</th>
                         </tr>
                     </thead>
@@ -295,9 +298,9 @@
                         <tr>
                             <td>{{ domain.url }}</td>
                             <td>{{ domain.detection_date }}</td>
-                            <td>{{ domain.confidence_score }}%</td>
+                            <td>{{ domain.confidence_score }}/100</td>
                             <td>
-                                <span class="badge bg-danger">Phishing</span>
+                                <span class="badge bg-danger">{{ domain.assessment }}</span>
                             </td>
                         </tr>
                         {% endfor %}
@@ -328,11 +331,7 @@
                             <td>{{ activity.timestamp }}</td>
                             <td>{{ activity.url }}</td>
                             <td>
-                                {% if activity.is_phishing %}
-                                <span class="badge bg-danger">Phishing</span>
-                                {% else %}
-                                <span class="badge bg-success">Safe</span>
-                                {% endif %}
+                                <span class="badge {{ 'bg-danger' if activity.risk_score >= 30 else 'bg-secondary' if activity.assessment == 'UNKNOWN' else 'bg-success' }}">{{ activity.assessment }}</span>
                             </td>
                             <td>{{ activity.details }}</td>
                         </tr>
@@ -345,15 +344,16 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        if (window.Chart) {
         // Distribution Chart
         const distributionCtx = document.getElementById('distributionChart').getContext('2d');
         new Chart(distributionCtx, {
             type: 'doughnut',
             data: {
-                labels: ['Safe Sites', 'Phishing Sites'],
+                labels: ['Low Observed Risk', 'Elevated Observed Risk', 'Insufficient Evidence'],
                 datasets: [{
-                    data: [JSON.parse('{{ safe_sites|tojson|safe }}'), JSON.parse('{{ phishing_sites|tojson|safe }}')],
-                    backgroundColor: ['#28a745', '#dc3545'],
+                    data: [JSON.parse('{{ safe_sites|tojson|safe }}'), JSON.parse('{{ phishing_sites|tojson|safe }}'), JSON.parse('{{ unknown_sites|tojson|safe }}')],
+                    backgroundColor: ['#28a745', '#dc3545', '#888888'],
                     borderColor: ['#1a1a1a', '#1a1a1a'],
                     borderWidth: 2
                 }]
@@ -379,12 +379,12 @@
             data: {
                 labels: JSON.parse('{{ dates|tojson|safe }}'),
                 datasets: [{
-                    label: 'Safe Sites',
+                    label: 'Low Observed Risk',
                     data: JSON.parse('{{ safe_trend|tojson|safe }}'),
                     borderColor: '#28a745',
                     tension: 0.4
                 }, {
-                    label: 'Phishing Sites',
+                    label: 'Elevated Observed Risk',
                     data: JSON.parse('{{ phishing_trend|tojson|safe }}'),
                     borderColor: '#dc3545',
                     tension: 0.4
@@ -422,6 +422,7 @@
                 }
             }
         });
+        }
     </script>
 </body>
 

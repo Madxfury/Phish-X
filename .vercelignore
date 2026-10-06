@@ -1,0 +1,14 @@
+.env
+.env.*
+.venv
+venv
+env
+data
+uploads
+myscrappy
+__pycache__
+.pytest_cache
+*.sqlite3*
+*.zip
+._*
+.DS_Store
