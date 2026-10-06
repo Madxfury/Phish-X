@@ -694,7 +694,7 @@ h1 {
 
 .bulk-input-wrapper {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 130px;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
     align-items: stretch;
 }
@@ -814,15 +814,14 @@ h1 {
 
 .bulk-scan-btn-custom {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     justify-content: center;
     align-items: center;
     gap: 0.4rem;
     padding: 0.5rem;
-    /* Keep the two-row button size as the URL list grows. */
-    align-self: start;
-    height: 100px;
-    min-height: 80px;
+    /* Full-width links above a stable, horizontal scan action. */
+    height: 48px;
+    min-height: 48px;
     width: 100%;
     margin: 0;
     border: 1px solid transparent;
