@@ -819,7 +819,9 @@ h1 {
     align-items: center;
     gap: 0.4rem;
     padding: 0.5rem;
-    height: auto;
+    /* Keep the two-row button size as the URL list grows. */
+    align-self: start;
+    height: 100px;
     min-height: 80px;
     width: 100%;
     margin: 0;
