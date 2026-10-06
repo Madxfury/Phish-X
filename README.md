@@ -11,7 +11,7 @@
   <a href="https://github.com/Madxfury/Phish-X/actions/workflows/diagnostics.yml"><img src="https://github.com/Madxfury/Phish-X/actions/workflows/diagnostics.yml/badge.svg" alt="Diagnostics workflow status"></a>
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.12">
   <img src="https://img.shields.io/badge/Flask-Jinja-202020?style=flat-square&amp;logo=flask&amp;logoColor=white" alt="Flask and Jinja">
-  <img src="https://img.shields.io/badge/AI-Groq-F55036?style=flat-square" alt="Groq AI">
+  <img src="https://img.shields.io/badge/AI-F55036?style=flat-square">
   <img src="https://img.shields.io/badge/Storage-Neon-00E599?style=flat-square" alt="Neon Postgres storage">
 </p>
 
