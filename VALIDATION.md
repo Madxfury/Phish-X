@@ -69,3 +69,8 @@ A fresh browser scan completed real GitHub fetch, VirusTotal and Groq explanatio
 ## Live Neon serverless-mode follow-up
 
 With VERCEL=1, an HTTPS Flask client, real Neon credentials and a fresh instance-local mirror, /api/readiness returned 200 with no issues. Real Google single scanning and Google/GitHub bulk scanning completed website fetching, Groq reasoning and VirusTotal reports, with durable Postgres results. A stored-evidence three-page report downloaded, a separate visitor received empty history/404 evidence, linked crawling returned the documented serverless_limit, and an oversized upload returned 413. Controlled PDF and benign APK processing returned the measured observations above. This verifies the serverless application path locally; actual Vercel runtime remains a separate check.
+
+
+## First actual cloud build
+
+The release branch triggered a real Vercel Preview build. Its parser rejected the included `-c requirements-lock.txt` directive before installing dependencies. `requirements.txt` now contains the same 67 exact runtime pins directly; no dependency version changed. CI installs that deployment file too. The corrected cloud build must pass before promotion.

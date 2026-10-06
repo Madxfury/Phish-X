@@ -6,7 +6,7 @@ Phish-X AI combines live website inspection, security signals, optional threat i
 
 ## Run on localhost
 
-Use Python 3.12. The release was tested with Python 3.12.13; `.python-version` selects 3.12 for Vercel. Runtime dependencies are pinned in `requirements-lock.txt`, applied by `requirements.txt`. From this project directory:
+Use Python 3.12. The release was tested with Python 3.12.13; `.python-version` selects 3.12 for Vercel. Runtime dependencies are pinned in both `requirements.txt` and `requirements-lock.txt`. The deploy file is flat because Vercel's requirements parser rejects an included constraints file. From this project directory:
 
 ```bash
 python3 -m venv .venv
