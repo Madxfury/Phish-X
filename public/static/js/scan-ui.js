@@ -261,11 +261,32 @@ async function bulkScan() {
     const urls=Array.from(document.querySelectorAll('.bulk-url-line')).map(input => input.value.trim()).filter(Boolean);
     if (!urls.length) { formatResult({error:'Enter at least one URL for bulk scanning.'}); element('resultsSection').style.display='block'; return; }
     isScanning=true; element('scanBtn').disabled=true; element('bulkScanBtn').disabled=true;
+    document.querySelectorAll('.bulk-url-line').forEach(input => input.disabled=true);
+    updateRowButtons();
+    currentResult=null;
     viewState.pending = true; saveState();
-    showLoading('Scanning submitted URLs with the same real evidence pipeline.');
-    try { const data=await requestJSON('/bulk_scan',{urls}); hideLoading(); element('resultsSection').style.display='none'; element('bulkResultsSection').style.display='block'; displayBulkResults(data); }
-    catch(error) { formatResult({error:error.message}); }
-    finally { isScanning=false; delete viewState.pending; saveState(); element('scanBtn').disabled=false; element('bulkScanBtn').disabled=false; }
+    showLoading(`Scanning ${urls.length} submitted URLs. Completed batches are saved as they finish.`);
+    try {
+        const data=await scanBulkBatches(urls, window.phishxBulkBatchSize || 2,
+            batch => requestJSON('/bulk_scan', {urls:batch}),
+            (completed, total, batch, aggregate) => {
+                displayBulkResults(aggregate);
+                viewState.pending = completed < total; saveState();
+                element('scanProgressText').textContent=`Processed ${completed} of ${total} URLs · ${aggregate.successful_scans} results · ${aggregate.failed_scans} errors`;
+                const line=document.createElement('li');
+                line.textContent=`Batch ${batch}: ${aggregate.successful_scans} scan results received so far.`;
+                element('liveProgress').append(line);
+            });
+        hideLoading(); element('resultsSection').style.display='none'; element('bulkResultsSection').style.display='block';
+        displayBulkResults(data);
+        switchTab('results', document.querySelector('.tab-button'));
+    } catch(error) { formatResult({error:error.message}); }
+    finally {
+        isScanning=false; delete viewState.pending; saveState();
+        element('scanBtn').disabled=false; element('bulkScanBtn').disabled=false;
+        document.querySelectorAll('.bulk-url-line').forEach(input => input.disabled=false);
+        updateRowButtons();
+    }
 }
 
 document.addEventListener('input', event => {
@@ -282,6 +303,13 @@ window.addEventListener('pageshow', event => {
     }
 });
 document.addEventListener('DOMContentLoaded', () => {
+    if (window.PHISHX_RELOAD) {
+        // Prevent browser form/scroll restoration from reintroducing the previous view.
+        element('urlInput').value = '';
+        document.querySelectorAll('.bulk-url-line').forEach(input => input.value = '');
+        requestAnimationFrame(() => window.scrollTo({top:0, left:0, behavior:'instant'}));
+        return;
+    }
     const saved = readState();
     if (typeof saved.url === 'string') element('urlInput').value = saved.url;
     if (Array.isArray(saved.bulk)) {
