@@ -83,6 +83,77 @@ def test_groq_uses_server_side_strict_schema_and_real_evidence(monkeypatch):
     assert result['key_reasons'][0]['supporting_evidence'][0]['id']=='html.observed'
 
 
+@pytest.mark.parametrize('ids', [['headers.observed'], ['html.observed'], ['intel.virustotal', 'headers.observed']])
+def test_ai_cannot_use_incidental_observations_to_explain_a_warning(ids):
+    f=html_features('<title>Controlled warning fixture</title>')
+    f['virus_total']={'status':'completed','total':10,'malicious':3,'suspicious':0,'harmless':3,'undetected':4,'vendors':[],'source':'Offline test fixture'}
+    risk=assess_risk(f)
+    response={'assessment':'CRITICAL','confidence':0.7,'key_reasons':[{'interpretation':'Missing headers and scripts support the threat verdict.','evidence_ids':ids}],
+              'recommended_action':'do_not_proceed','limitations':['Controlled offline fixture.']}
+    with pytest.raises(ValueError,match='observation-only'):
+        ai.validate_ai_result(response,risk)
+
+
+def test_provider_reason_citations_are_restricted_to_actual_scoring_findings(monkeypatch):
+    monkeypatch.setenv('AI_PROVIDER','groq'); monkeypatch.setenv('GROQ_API_KEY','test-not-real')
+    f=html_features('<title>Controlled warning fixture</title>')
+    f['virus_total']={'status':'completed','total':10,'malicious':3,'suspicious':0,'harmless':3,'undetected':4,'vendors':[],'source':'Offline test fixture'}
+    risk=assess_risk(f)
+    response={'assessment':'CRITICAL','confidence':0.7,'key_reasons':[{'interpretation':'The vendor report raises a warning requiring independent verification.','evidence_ids':['intel.virustotal']}],
+              'recommended_action':'do_not_proceed','limitations':['Vendor opinions are not observed malicious execution.']}
+    def api(method,endpoint,*a,**kw):
+        schema=kw['json']['response_format']['json_schema']['schema']
+        assert schema['properties']['key_reasons']['items']['properties']['evidence_ids']['items']['enum']==['intel.virustotal']
+        assert schema['properties']['key_reasons']['items']['properties']['interpretation']['pattern']==r'^[^0-9]*$'
+        payload=json.loads(kw['json']['messages'][1]['content'])
+        assert payload['reason_evidence_ids']==['intel.virustotal']
+        assert any(item['id']=='html.observed' for item in payload['evidence'])
+        return 200,{}, {'choices':[{'finish_reason':'stop','message':{'content':json.dumps(response)}}]}
+    monkeypatch.setattr(ai,'api_json',api)
+    result=ai.analyze_with_ai(f,risk)
+    assert result['status']=='completed'
+    assert all(item['points']>0 for reason in result['key_reasons'] for item in reason['supporting_evidence'])
+
+
+@pytest.mark.parametrize('interpretation', ['A majority of vendors flag this URL.', 'The vendors show consensus of malicious intent.', 'The report proves confirmed phishing.'])
+def test_ai_vendor_opinions_cannot_be_overstated(interpretation):
+    f=html_features('<title>Controlled warning fixture</title>')
+    f['virus_total']={'status':'completed','total':92,'malicious':12,'suspicious':0,'harmless':49,'undetected':31,'vendors':[],'source':'Offline test fixture'}
+    response={'assessment':'CRITICAL','confidence':0.7,'key_reasons':[{'interpretation':interpretation,'evidence_ids':['intel.virustotal']}],
+              'recommended_action':'do_not_proceed','limitations':[]}
+    with pytest.raises(ValueError,match='overstated vendor opinion'):
+        ai.validate_ai_result(response,assess_risk(f))
+
+
+def test_ai_numbers_are_displayed_from_evidence_not_recomputed_in_prose():
+    f=html_features('<title>Controlled transport fixture</title>')
+    response={'assessment':'SAFE','confidence':0.7,'key_reasons':[{'interpretation':'The HTTP200 response demonstrates normal operation.','evidence_ids':['http.response']}],
+              'recommended_action':'verify_context','limitations':[]}
+    with pytest.raises(ValueError,match='quantitative'):
+        ai.validate_ai_result(response,assess_risk(f))
+
+
+@pytest.mark.parametrize('repair_succeeds', [True,False])
+def test_groq_regenerates_rejected_reason_once_without_fabricating(monkeypatch,repair_succeeds):
+    monkeypatch.setenv('AI_PROVIDER','groq'); monkeypatch.setenv('GROQ_API_KEY','test-not-real')
+    f=html_features('<title>Controlled repair fixture</title>');risk=assess_risk(f)
+    valid={'assessment':'SAFE','confidence':0.7,'key_reasons':[{'interpretation':'No sensitive fields were observed in the inspected HTML.','evidence_ids':['html.observed']}],
+           'recommended_action':'verify_context','limitations':['Static inspection.']}
+    invalid={**valid,'key_reasons':[{'interpretation':'There are 999 sensitive fields.','evidence_ids':['html.observed']}]}
+    calls=[]
+    def api(*a,**kw):
+        calls.append(kw['json'])
+        if len(calls)==2:
+            assert 'prior response failed evidence validation' in kw['json']['messages'][-1]['content']
+        response=valid if repair_succeeds and len(calls)==2 else invalid
+        return 200,{}, {'choices':[{'finish_reason':'stop','message':{'content':json.dumps(response)}}]}
+    monkeypatch.setattr(ai,'api_json',api)
+    result=ai.analyze_with_ai(f,risk)
+    assert len(calls)==2
+    assert result['status']==('completed' if repair_succeeds else 'invalid_response')
+    assert ('confidence' in result)==repair_succeeds
+
+
 @pytest.mark.parametrize('reply', [None,{}, {'choices':[]}, {'choices':[{'finish_reason':'length','message':{'content':'{}'}}]}])
 def test_groq_incomplete_responses_never_claim_ai(monkeypatch,reply):
     monkeypatch.setenv('AI_PROVIDER','groq'); monkeypatch.setenv('GROQ_API_KEY','test-not-real')
@@ -126,8 +197,7 @@ def test_ai_context_sampling_preserves_citations_and_full_ledger():
     assert payload['evidence'][0]['id']=='controlled.destinations'
     by_id={item['id']:item for item in payload['evidence']}
     assert by_id['controlled.destinations']['detail']['omitted_items']==12
-    assert by_id['html.text']['detail']['truncated'] is True
-    assert len(by_id['html.text']['detail']['excerpt'])==600
+    assert by_id['html.text']['detail']==next(item['detail'] for item in risk['evidence'] if item['id']=='html.text')
     assert by_id['headers.observed']['detail']=={'content-security-policy':{'present':True},'x-frame-options':{'present':False}}
     assert 'a'*1000 not in json.dumps(payload)
     assert 'page_text_excerpt_untrusted' not in payload  # No duplicate text.
