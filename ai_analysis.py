@@ -30,6 +30,10 @@ Vendor detections are vendor opinions, not verified malicious activity. Domain-l
 VirusTotal reports apply to the submitted URL; do not generalize a URL report to the entire domain.
 Never describe vendor agreement as proof of malicious intent, confirmed phishing, or observed malicious execution.
 When warnings exist, focus key reasons on the evidence with positive points. Do not pad the list to five reasons.
+The supplied reason_evidence_ids are the only permitted citations for key_reasons. When any scoring evidence exists,
+this list excludes observation-only records. Explain only the facts in those cited records. If there is one permitted
+record, give one focused reason. Do not add uncited scripts, headers or other observations to that explanation.
+Use non-scoring observations only for context in limitations, never as additional contributors to the risk verdict.
 Use one to three focused reasons where sufficient. Zero-point observations can clarify context, but must not be
 presented as new threats: missing headers, uninspected scripts and incomplete identity coverage belong in limitations.
 Describe missing coverage as unknown, without speculating that hidden malicious behavior exists.
@@ -41,6 +45,8 @@ Note possible false positives and contextual uncertainty in limitations rather t
 Use UNKNOWN when content is unavailable and no meaningful threat evidence exists. Explicitly account for unavailable sources.
 Write short interpretations of why the cited evidence matters, without adding new URLs, counts, dates or factual claims.
 Do not restate numerical observations or convert their units in your prose; the application displays the measured values separately.
+Key-reason interpretations must contain no digits. For vendor reports say that some vendors flagged the submitted URL;
+do not call those reports a majority, consensus, malicious intent, confirmed phishing or proof of malicious activity.
 Do not infer site legitimacy from a valid TLS certificate or domain age. Do not call a clean vendor report proof of safety.
 Return confidence as a number between 0 and 1, not a percentage.
 Return the requested JSON schema with at most 5 key reasons. Never claim code execution or comprehensive detection."""
@@ -49,6 +55,12 @@ ACTIONS = {"verify_context": "Verify the hostname and context independently befo
            "avoid_sensitive_data": "Avoid submitting credentials or payment details until the destination is independently verified.",
            "do_not_proceed": "Do not proceed or submit sensitive information; verify through a trusted channel.",
            "insufficient_evidence": "Evidence is incomplete; do not infer safety from this result. Verify independently."}
+
+
+def reason_evidence_ids(evidence: list[dict]) -> list[str]:
+    """Warnings must explain scored findings, rather than incidental page structure."""
+    scored = [item["id"] for item in evidence if item["points"] > 0]
+    return scored or [item["id"] for item in evidence]
 
 
 def evidence_payload(features: dict, risk: dict) -> dict:
@@ -75,7 +87,7 @@ def evidence_payload(features: dict, risk: dict) -> dict:
         detail = item["detail"]
         if item['id'] == 'headers.observed' and isinstance(detail, dict):
             detail = {name: {"present": bool(value)} for name, value in detail.items()}
-        view = {**item, "detail": compact(detail)}
+        view = {**item, "detail": compact(detail, limit=1600 if item['id'] == 'html.text' else 600)}
         size = len(json.dumps(view, ensure_ascii=False))
         if context_chars + size > 12000:
             omitted += 1
@@ -83,7 +95,7 @@ def evidence_payload(features: dict, risk: dict) -> dict:
         evidence.append(view)
         context_chars += size
     return {"url": features["_original_url"], "deterministic_score": risk["score"], "deterministic_assessment": risk["assessment"],
-            "scan_state": risk["state"], "evidence": evidence, "unavailable": risk["unavailable"],
+            "scan_state": risk["state"], "evidence": evidence, "reason_evidence_ids": reason_evidence_ids(evidence), "unavailable": risk["unavailable"],
             "omitted_evidence_records": omitted + max(0, len(ordered) - 70),
             "coverage": "Bounded static HTML/source inspection, not a browser session. Context excerpts/lists are explicitly sampled; use cited observations only. Full details remain in the scan ledger. Referenced URLs are not evidence of compromise."}
 
@@ -98,6 +110,7 @@ def validate_ai_result(data: dict, risk: dict) -> dict:
     if not isinstance(data["limitations"], list) or len(data["limitations"]) > 12 or not all(isinstance(s, str) and len(s) <= 500 for s in data["limitations"]):
         raise ValueError("Invalid limitations")
     by_id = {item["id"]: item for item in risk["evidence"]}
+    permitted_ids = set(reason_evidence_ids(risk["evidence"]))
     reasons = []
     for reason in data["key_reasons"]:
         if not isinstance(reason, dict) or set(reason) != {"interpretation", "evidence_ids"}:
@@ -105,13 +118,21 @@ def validate_ai_result(data: dict, risk: dict) -> dict:
         ids = reason["evidence_ids"]
         if not isinstance(reason["interpretation"], str) or not 1 <= len(reason["interpretation"]) <= 700 or not isinstance(ids, list) or not ids or len(ids) > 8 or any(not isinstance(i, str) or i not in by_id for i in ids):
             raise ValueError("AI cited nonexistent or missing evidence")
+        if any(i not in permitted_ids for i in ids):
+            raise ValueError("AI used observation-only evidence to explain a scored warning")
         cited = [by_id[i] for i in ids]
         corpus = json.dumps(cited, ensure_ascii=False).lower()
         # Reject invented URLs / numeric observations; explanations should interpret the ledger.
         urls = re.findall(r'https?://[^\s<>"\)]+', reason["interpretation"])
-        numbers = re.findall(r'(?<![\w])\d+(?:\.\d+)?', reason["interpretation"])
-        if any(url.lower() not in corpus for url in urls) or any(number not in corpus for number in numbers):
+        numbers = re.findall(r'\d+(?:\.\d+)?', reason["interpretation"])
+        if any(url.lower() not in corpus for url in urls):
             raise ValueError("AI added unsupported URL or numerical observations")
+        if numbers:
+            raise ValueError("AI restated quantitative observations; explain their implication without numbers")
+        if any(item['kind'] == 'vendor_assessment' for item in cited) and re.search(
+                r'\b(?:majority|consensus|malicious intent|confirmed phishing|confirmed malicious|proof of (?:phishing|malware|malicious activity))\b',
+                reason['interpretation'], re.IGNORECASE):
+            raise ValueError("AI overstated vendor opinion as consensus or confirmed malicious activity")
         reasons.append({**reason, "supporting_evidence": cited})
     if risk["assessment"] == "UNKNOWN" and data["assessment"] in {"SAFE", "LOW"}:
         raise ValueError("AI safety claim unsupported by scan coverage")
@@ -141,7 +162,9 @@ def analyze_with_ai(features: dict, risk: dict, deadline: float | None = None) -
     structured = evidence_payload(features, risk)
     payload = json.dumps(structured, ensure_ascii=False)
     schema = copy.deepcopy(SCHEMA)
-    schema['properties']['key_reasons']['items']['properties']['evidence_ids']['items']['enum'] = [item['id'] for item in structured['evidence']]
+    schema['properties']['key_reasons']['items']['properties']['evidence_ids']['items']['enum'] = structured['reason_evidence_ids']
+    if provider == 'groq':
+        schema['properties']['key_reasons']['items']['properties']['interpretation']['pattern'] = r'^[^0-9]*$'
     # Constrain coverage and warning boundaries while the model reasons over evidence.
     # This does not manufacture an AI response: a completed service call is still required.
     if risk['assessment'] == 'UNKNOWN':
@@ -174,24 +197,36 @@ def analyze_with_ai(features: dict, risk: dict, deadline: float | None = None) -
             for attempt in range(2):
                 status, headers, result = api_json("POST", "https://api.groq.com/openai/v1/chat/completions", deadline, read_timeout=12,
                     headers={"Authorization": "Bearer " + configured_key("GROQ_API_KEY")}, json=body)
-                if status != 429 or attempt:
-                    break
+                if status == 429 and not attempt:
+                    try:
+                        delay = float(headers.get('Retry-After', headers.get('retry-after', '')))
+                    except (ValueError, TypeError):
+                        delay = 0
+                    # At most two requests total, within the same scan deadline.
+                    if 0 < delay <= 3 and time.monotonic() + delay + 2 < deadline:
+                        time.sleep(delay)
+                        continue
+                if status != 200:
+                    return {"status": "rate_limited" if status == 429 else "unauthorized" if status in {401, 403} else "unavailable",
+                            "provider": provider, "retry_after": headers.get("Retry-After", headers.get("retry-after")),
+                            "reason": f"Groq returned HTTP {status}; no AI assessment was generated."}
+                choice = result["choices"][0]
+                if choice.get("finish_reason") != "stop" or choice["message"].get("refusal"):
+                    raise ValueError("Incomplete or refused Groq response")
                 try:
-                    delay = float(headers.get('Retry-After', headers.get('retry-after', '')))
-                except (ValueError, TypeError):
-                    break
-                # Retry one short provider-requested delay, within the same scan deadline.
-                if not 0 < delay <= 3 or time.monotonic() + delay + 2 >= deadline:
-                    break
-                time.sleep(delay)
-            if status != 200:
-                return {"status": "rate_limited" if status == 429 else "unauthorized" if status in {401, 403} else "unavailable",
-                        "provider": provider, "retry_after": headers.get("Retry-After", headers.get("retry-after")),
-                        "reason": f"Groq returned HTTP {status}; no AI assessment was generated."}
-            choice = result["choices"][0]
-            if choice.get("finish_reason") != "stop" or choice["message"].get("refusal"):
-                raise ValueError("Incomplete or refused Groq response")
-            output = choice["message"]["content"]
+                    validated = validate_ai_result(json.loads(choice["message"]["content"]), risk)
+                except ValueError:
+                    if attempt or time.monotonic() + 3 >= deadline:
+                        raise
+                    # Ask the actual provider to regenerate once; never invent a replacement.
+                    body['messages'].append({"role": "user", "content":
+                        "The prior response failed evidence validation. Regenerate the JSON. Use only reason_evidence_ids, "
+                        "one focused reason if there is one permitted record. Interpret only cited facts without digits. "
+                        "Do not describe observation-only headers/scripts as threat contributors. Vendor opinions are a "
+                        "warning requiring verification, never majority/consensus or confirmed malicious intent. "
+                        "Mention relevant observed test-page context only as an unverified website statement in limitations."})
+                    continue
+                return {**validated, "provider": provider, "model": model}
         else:
             endpoint = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
             p = urlsplit(endpoint)
