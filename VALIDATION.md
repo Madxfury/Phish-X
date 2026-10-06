@@ -56,7 +56,7 @@ Neon Postgres is the preferred durable backend, with full JSONB evidence, visito
 
 **Real Neon pooled storage passed live checks:** certificate-verified connection, full GitHub scan JSONB persistence, matching retrieval from a fresh ScanStore with an empty local database, separate-visitor denial, atomic true/true/false shared-counter behavior and a four-page PDF regenerated from the same stored scan. Groq and VirusTotal completed for that scan. A startup parameter incompatibility was fixed using transaction-local two-second statement and one-second lock timeouts; their effective values were verified against Neon. Actual Vercel build/runtime, cold starts, cloud egress and file workers still require verification.
 
-Follow README's concrete Neon setup and cloud verification steps before shipping. /tmp SQLite is only an emergency instance mirror; new production work stops when durable configuration is missing. The ZIP excludes environment files/credentials, local databases, uploads/fixtures, caches, generated CDN copies and virtual environments. Archive contents and configured secret strings are checked before delivery.
+Follow README's concrete Neon setup and cloud verification steps before shipping. /tmp SQLite is only an emergency instance mirror; new production work stops when durable configuration is missing. The ZIP excludes environment files/credentials, local databases, uploads/fixtures, caches and virtual environments. Matching public CDN assets are included. Archive contents and configured secret strings are checked before delivery.
 
 ## Fresh diagnostic follow-up
 
@@ -73,4 +73,9 @@ With VERCEL=1, an HTTPS Flask client, real Neon credentials and a fresh instance
 
 ## First actual cloud build
 
-The release branch triggered a real Vercel Preview build. Its parser rejected the included `-c requirements-lock.txt` directive before installing dependencies. `requirements.txt` now contains the same 67 exact runtime pins directly; no dependency version changed. CI installs that deployment file too. The corrected cloud build must pass before promotion.
+The release branch triggered a real Vercel Preview build. Its parser rejected the included `-c requirements-lock.txt` directive before installing dependencies. `requirements.txt` now contains the same 67 exact runtime pins directly; no dependency version changed. CI installs that deployment file too. The corrected build passed on Vercel (Python 3.12, function 74.59 MB), and Linux GitHub Actions passed all 83 tests and dependency checks. The hosted real GitHub scan completed HTTP/HTML inspection, Groq reasoning and VirusTotal in 1.44 seconds and saved full results to Neon. Cloud history/evidence retrieval, a four-page report from the same ID, separate-visitor isolation, private/protocol input rejection and linked-crawl limits passed. Production has not been promoted.
+
+
+Static assets initially worked through Flask but were absent from Vercel's static output because public files were generated after initial discovery. Matching `public/static/` assets are now included in the release, with a CI equality check against their preserved original source files. The corrected deployment is checked separately for CDN serving.
+
+Additional actual Preview checks returned 200 for every original page, fetched Google/GitHub through the bulk pipeline, reused the verified GitHub ID through the HTTP crawler, and ran Linux PDF/APK workers successfully with the actual fixture observations above. Google bulk AI completed; one subsequent GitHub AI response was rejected as invalid and explicitly unavailable. Other real GitHub AI requests completed. Model schema/evidence validation and optional-service failures remain visible rather than generating a replacement claim.

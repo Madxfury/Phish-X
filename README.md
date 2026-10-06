@@ -165,7 +165,7 @@ If no Vercel project exists yet, Neon can also be created directly in its dashbo
 
 This Python Flask app uses HTTP on Vercel; Python SocketIO/WebSocket compatibility is not claimed. Uploads are capped below the documented [4.5 MB function request limit](https://vercel.com/docs/errors/function_payload_too_large), including multipart overhead. `/tmp` is temporary; Postgres or MongoDB provides durable evidence for reports/history across instances. A missing or inaccessible report returns 409. APK dependency size and worker behavior still need verification in the actual cloud build/runtime.
 
-The configuration and serverless application mode were tested locally. **A real free Neon pooled connection, complete scan persistence, retrieval from a fresh application instance, visitor isolation, atomic shared counters and stored-evidence PDF reports passed live checks. Groq, VirusTotal and stable session settings are configured for Vercel Preview/Production. An actual Vercel build/runtime and Safe Browsing lookup still require verification.** Local serverless-mode checks are separate from actual cloud execution.
+The configuration and serverless application mode were tested locally and on a real Vercel Preview. **A real free Neon pooled connection, complete scan persistence, retrieval from a fresh application instance, visitor isolation, atomic shared counters and stored-evidence PDF reports passed live checks. Groq, VirusTotal and stable session settings are configured for Vercel Preview/Production. An actual Vercel Preview build and hosted real GitHub scan (HTTP 200, parsed HTML, completed Groq/VT, durable Neon history, report and visitor isolation) also passed. Safe Browsing remains optional and unconfigured.** Local serverless-mode checks are separate from actual cloud execution.
 
 ## Data handling
 
@@ -179,3 +179,10 @@ python -m pytest -q
 ```
 
 Tests are offline, controlled fixtures in temporary databases, never seeded production security results. They cover SSRF, rebinding-resistant connections, redirects, response limits, scoring evidence, client verdict spoofing, full caching, report reuse, AI validation/failures, intelligence status handling, file checks, database fallback and serverless mode. See `AUDIT.md` for the original route audit and `VALIDATION.md` for actual localhost/browser/network observations and remaining configuration requirements.
+
+
+### Public assets and release checks
+
+The existing `static/` files remain the source. Matching `public/static/` copies are committed because Vercel discovers public assets before the Python build command runs. This keeps the same Jinja URLs and visual design while serving those files from the CDN. After editing an asset, run `python prepare_vercel.py` and commit both copies. CI runs `python prepare_vercel.py --check` to reject missing, stale or mismatched deployment assets.
+
+GitHub Actions runs the regression suite, pinned dependency checks, Python compilation and JavaScript parsing on Linux/Python 3.12. `VALIDATION.md` records measured live checks. The release branch and draft PR allow Preview verification before merging to the production branch.

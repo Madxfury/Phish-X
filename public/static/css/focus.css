@@ -1,0 +1,31 @@
+/* Shared focus treatment for every Phish-X page. */
+:is(button, a, input, textarea, select, summary, [role="button"]):focus {
+    outline: none;
+}
+
+:is(button, a, input, textarea, select, summary, [role="button"]):focus-visible {
+    outline: 2px solid #e31b23;
+    outline-offset: 3px;
+}
+
+/* Text fields use their existing outer frame rather than an inner focus box. */
+:is(.url-input, .bulk-url-line):focus,
+:is(.url-input, .bulk-url-line):focus-visible {
+    outline: none;
+    box-shadow: none;
+}
+
+:is(.url-input-wrapper, .bulk-url-input-wrapper):focus-within {
+    border-color: #e31b23;
+    box-shadow: 0 0 6px rgba(227, 27, 35, 0.25);
+}
+
+:is(input, textarea, select):not(.url-input):not(.bulk-url-line):focus {
+    border-color: #e31b23;
+    box-shadow: 0 0 0 2px rgba(227, 27, 35, 0.2);
+}
+
+.threat-graph g:focus rect {
+    stroke: #e31b23;
+    stroke-width: 3;
+}

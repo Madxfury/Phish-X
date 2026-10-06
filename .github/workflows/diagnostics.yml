@@ -18,7 +18,7 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pip check
       - run: python -m pytest tests -q -p no:cacheprovider
-      - run: python prepare_vercel.py
+      - run: python prepare_vercel.py --check
       - run: python -m compileall -q app.py features_extract.py secure_fetch.py ai_analysis.py storage.py postgres_store.py risk_engine.py file_analysis.py reports.py threat_intelligence.py
       - run: |
           for file in static/js/*.js; do node --check "$file"; done
