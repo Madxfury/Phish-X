@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="static/images/logo.png" alt="Phish-X" width="310">
-</p>
-
-<p align="center">
   <a href="https://phishxai.vercel.app/"><strong>Open Phish-X AI ↗</strong></a> &nbsp;·&nbsp;
   <a href="#run-it-yourself">Run locally</a> &nbsp;·&nbsp;
   <a href="docs/OPERATIONS.md">Engineering guide</a> &nbsp;·&nbsp;
