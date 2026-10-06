@@ -6,8 +6,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Phish-X AI</title>
     <script>
-        // Decide before first paint so returning home cannot flash the intro overlay.
-        try { if (sessionStorage.getItem('phishx.introSeen')) document.documentElement.classList.add('skip-intro'); } catch {}
+        // Refresh starts Home again; ordinary navigation keeps the current session.
+        window.PHISHX_RELOAD = false;
+        try { window.PHISHX_RELOAD = performance.getEntriesByType('navigation')[0]?.type === 'reload'; } catch {}
+        try {
+            if (window.PHISHX_RELOAD) {
+                sessionStorage.removeItem('phishx.introSeen');
+                sessionStorage.removeItem('phishx.scanState.v1');
+                history.scrollRestoration = 'manual';
+            } else if (sessionStorage.getItem('phishx.introSeen')) {
+                document.documentElement.classList.add('skip-intro');
+            }
+        } catch { /* Disabled browser storage must not prevent the interface opening. */ }
     </script>
     <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon1.png') }}">
@@ -236,7 +246,8 @@
     <noscript><style>#hacker-preloader { display: none; }</style></noscript>
     {% if socketio_enabled %}<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>{% endif %}
     <script>window.PHISHX_SOCKETIO = {{ socketio_enabled|tojson }};</script>
-    <script src="{{ url_for('static', filename='js/scan-ui.js', v='shield-cleanup-1') }}"></script>
+    <script src="{{ url_for('static', filename='js/bulk-client.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/scan-ui.js', v='bulk-refresh-2') }}"></script>
     <script>
         // Event Listeners
         document.getElementById('scanBtn').addEventListener('click', scanWebsite);
@@ -271,7 +282,8 @@
                     addBtn.type = 'button';
                     addBtn.className = 'bulk-row-btn add-btn';
                     addBtn.title = 'Add Link'; addBtn.setAttribute('aria-label', 'Add URL row');
-                    addBtn.disabled = rows.length >= (window.phishxBulkLimit || 10);
+                    addBtn.disabled = isScanning || rows.length >= 10;
+                    if (rows.length >= 10) addBtn.title = 'Maximum 10 links';
                     addBtn.innerHTML = '<i class="fas fa-plus"></i>';
                     addBtn.onclick = () => addRowAfter(index);
 
@@ -279,6 +291,7 @@
                     removeBtn.type = 'button';
                     removeBtn.className = 'bulk-row-btn remove-btn';
                     removeBtn.title = 'Remove Link'; removeBtn.setAttribute('aria-label', 'Remove URL row');
+                    removeBtn.disabled = isScanning;
                     removeBtn.innerHTML = '<i class="fas fa-minus"></i>';
                     removeBtn.onclick = () => removeRowAt(index);
 
@@ -294,6 +307,7 @@
                     addBtn.type = 'button';
                     addBtn.className = 'bulk-row-btn add-btn';
                     addBtn.title = 'Add Link'; addBtn.setAttribute('aria-label', 'Add URL row');
+                    addBtn.disabled = isScanning;
                     addBtn.innerHTML = '<i class="fas fa-plus"></i>';
                     addBtn.onclick = () => addRowAfter(index);
 
@@ -307,7 +321,7 @@
             const container = document.getElementById('bulkUrlContainer');
             if (!container) return;
             const rows = container.querySelectorAll('.bulk-url-row');
-            if (rows.length >= (window.phishxBulkLimit || 10)) return;
+            if (isScanning || rows.length >= 10) return;
             const targetRow = rows[index];
 
             const newRow = document.createElement('div');
@@ -322,15 +336,18 @@
             targetRow.after(newRow);
             updateRowButtons();
             if (focus) newRow.querySelector('.bulk-url-line').focus();
+            saveState();
         }
 
         function removeRowAt(index) {
+            if (isScanning) return;
             const container = document.getElementById('bulkUrlContainer');
             if (!container) return;
             const rows = container.querySelectorAll('.bulk-url-row');
             if (rows[index]) {
                 rows[index].remove();
                 updateRowButtons();
+                saveState();
             }
         }
 
@@ -344,7 +361,7 @@
         document.addEventListener('DOMContentLoaded', async () => {
             try {
                 const capabilities = await requestJSON('/api/capabilities');
-                window.phishxBulkLimit = capabilities.bulk_limit;
+                window.phishxBulkBatchSize = capabilities.bulk_limit;
                 updateRowButtons();
             } catch { /* The scan request reports connectivity errors when submitted. */ }
         });
