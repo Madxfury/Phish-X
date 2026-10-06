@@ -1,13 +1,25 @@
-from urllib.parse import urlparse
-import re, requests, socket, ssl , whois , base64 , dns.resolver, os
-from bs4 import BeautifulSoup
-from datetime import datetime
-import time
+"""Phish-X URL, domain and content extraction; one verified crawl per analysis."""
+from __future__ import annotations
+from collections import Counter
+from datetime import datetime, timezone
+import ipaddress
 import math
+import os
+import re
+import time
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
-# ──────────────────────────────────────────────────────────────
-# Brand Impersonation Detection
-# ──────────────────────────────────────────────────────────────
+from bs4 import BeautifulSoup
+import dns.resolver
+import dns.exception
+import tldextract
+
+from secure_fetch import ScanError, fetch_website, normalize_url, resolve_target, public_ip
+from threat_intelligence import check_url_virustotal, check_google_safe_browsing
+
+_SUFFIXES = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+_SITE_SUFFIXES = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None, include_psl_private_domains=True)
+
 LEGITIMATE_BRANDS = {
     # Banks & Finance
     'paypal': ['paypal.com'],
@@ -37,719 +49,381 @@ LEGITIMATE_BRANDS = {
     'govt': ['gov.in', 'nic.in'],
 }
 
-def detect_brand_impersonation(url):
-    """Detect if a URL is impersonating a well-known brand."""
-    parsed = urlparse(url)
-    domain = parsed.netloc.lower()
-    full_url_lower = url.lower()
-    
-    impersonated_brands = []
-    
-    for brand, legit_domains in LEGITIMATE_BRANDS.items():
-        # Check if brand name appears in the URL
-        if brand in full_url_lower:
-            # Check if the domain is NOT one of the legitimate domains
-            is_legitimate = False
-            for legit in legit_domains:
-                if domain == legit or domain.endswith('.' + legit):
-                    is_legitimate = True
-                    break
-            if not is_legitimate:
-                impersonated_brands.append(brand)
-    
-    return {
-        'is_impersonating': len(impersonated_brands) > 0,
-        'impersonated_brands': impersonated_brands,
-        'brand_count': len(impersonated_brands)
-    }
+
+def registered_domain(host: str) -> str:
+    parts = _SUFFIXES(host or "")
+    return parts.top_domain_under_public_suffix or host
 
 
-def analyze_url_structure(url):
-    """Deep structural analysis of URL for phishing indicators."""
-    parsed = urlparse(url)
-    domain = parsed.netloc.lower()
-    path = parsed.path.lower()
-    
-    # Count hyphens in domain
-    hyphen_count = domain.count('-')
-    
-    # Count subdomains
-    parts = domain.split('.')
-    subdomain_depth = max(0, len(parts) - 2)
-    
-    # Calculate domain entropy (randomness indicator)
-    domain_no_tld = '.'.join(parts[:-1]) if len(parts) > 1 else domain
-    entropy = 0.0
-    if domain_no_tld:
-        freq = {}
-        for c in domain_no_tld:
-            freq[c] = freq.get(c, 0) + 1
-        length = len(domain_no_tld)
-        for count in freq.values():
-            p = count / length
-            if p > 0:
-                entropy -= p * math.log2(p)
-    
-    # Check for number-heavy domains (e.g., bank123-login456.com)
-    digit_ratio = sum(1 for c in domain if c.isdigit()) / max(len(domain), 1)
-    
-    # Path depth
-    path_depth = len([p for p in path.split('/') if p])
-    
-    # Suspicious path keywords
-    suspicious_path_words = [
-        'login', 'signin', 'verify', 'account', 'secure', 'update',
-        'confirm', 'banking', 'password', 'credential', 'auth',
-        'wallet', 'payment', 'billing', 'suspend', 'locked',
-        'recover', 'restore', 'validate', 'webscr', 'cmd'
-    ]
-    path_keyword_count = sum(1 for w in suspicious_path_words if w in path)
-    
-    # Check for deceptive patterns
-    has_double_extension = bool(re.search(r'\.\w+\.\w+$', path))  # e.g., file.pdf.exe
-    has_data_uri = 'data:' in url
-    has_encoded_chars = '%' in url and ('%2f' in url.lower() or '%3a' in url.lower() or '%40' in url.lower())
-    
-    return {
-        'hyphen_count': hyphen_count,
-        'subdomain_depth': subdomain_depth,
-        'entropy': round(entropy, 2),
-        'digit_ratio': round(digit_ratio, 2),
-        'path_depth': path_depth,
-        'path_keyword_count': path_keyword_count,
-        'has_double_extension': int(has_double_extension),
-        'has_data_uri': int(has_data_uri),
-        'has_encoded_chars': int(has_encoded_chars)
-    }
+def same_site(a: str, b: str) -> bool:
+    # Hosted tenants (for example user.github.io) are separate sites, even when
+    # their provider shares one public registrable domain.
+    def site(host):
+        parts = _SITE_SUFFIXES(host or "")
+        return parts.top_domain_under_public_suffix or host
+    return site(a) == site(b)
 
-def extract_url_features(url):
-    parsed_url = urlparse(url)
 
-    length = len(url)
-    num_dots = url.count('.')
-    num_slashes = url.count('/')
-    num_subdomains = parsed_url.netloc.count('.') - 1
-    has_ip = bool(re.match(r'\d+\.\d+\.\d+\.\d+', parsed_url.netloc))
-    has_http = url.startswith('http')
-    has_https = url.startswith('https')
-    has_at = '@' in url
-    tld = parsed_url.netloc.split('.')[-1] if '.' in parsed_url.netloc else ''
-    
-    return {
-        'length': length,
-        'num_dots': num_dots,
-        'num_slashes': num_slashes,
-        'num_subdomains': num_subdomains,
-        'has_ip': int(has_ip),
-        'has_http': int(has_http),
-        'has_https': int(has_https),
-        'has_at': int(has_at),
-        'tld': tld
-    }
-def extract_keyword_features(url):
-    url_lower = url.lower()
-    
-    # Core phishing keywords
-    keywords = [
-        'login', 'secure', 'account', 'bank', 'verify', 'password', 'update',
-        'confirm', 'click', 'free', 'win', 'prize', 'submit', 'checkout', 'access', 'otp',
-        'suspend', 'expire', 'urgent', 'unlock', 'credential', 'signin', 'signup',
-        'billing', 'payment', 'wallet', 'reward', 'alert', 'warning', 'blocked',
-        'restore', 'recover', 'unauthorized', 'phishing', 'malware', 'suspicious'
-    ]
-    keyword_count = sum(1 for keyword in keywords if keyword in url_lower)
-    
-    has_login = int('login' in url_lower or 'signin' in url_lower or 'sign-in' in url_lower)
-    has_verify = int('verify' in url_lower or 'confirm' in url_lower or 'validate' in url_lower)
-    has_bank = int('bank' in url_lower or 'banking' in url_lower)
-    has_account = int('account' in url_lower)
-    has_secure = int('secure' in url_lower or 'security' in url_lower)
-    has_update = int('update' in url_lower or 'upgrade' in url_lower)
-    has_suspend = int('suspend' in url_lower or 'locked' in url_lower or 'blocked' in url_lower)
-    
-    # Dangerous keyword combinations (very strong phishing signals)
-    dangerous_combos = 0
-    combo_pairs = [
-        ('login', 'bank'), ('verify', 'account'), ('secure', 'login'),
-        ('update', 'account'), ('confirm', 'bank'), ('password', 'reset'),
-        ('suspend', 'account'), ('locked', 'account'), ('verify', 'bank'),
-        ('signin', 'bank'), ('payment', 'verify'), ('billing', 'update'),
-        ('credential', 'verify'), ('urgent', 'account'), ('expire', 'account')
-    ]
-    for w1, w2 in combo_pairs:
-        if w1 in url_lower and w2 in url_lower:
-            dangerous_combos += 1
-    
-    return {
-        'keyword_count': keyword_count,
-        'has_login': has_login,
-        'has_verify': has_verify,
-        'has_bank': has_bank,
-        'has_account': has_account,
-        'has_secure': has_secure,
-        'has_update': has_update,
-        'has_suspend': has_suspend,
-        'dangerous_combos': dangerous_combos
-    }
+def entropy(value: str) -> float:
+    return round(-sum((n / len(value)) * math.log2(n / len(value)) for n in Counter(value).values()), 3) if value else 0.0
 
-suspicious_tlds = [
-    '.xyz', '.tk', '.cf', '.ml', '.ga', '.gq', '.top', '.buzz',
-    '.club', '.work', '.info', '.icu', '.cam', '.rest', '.surf',
-    '.monster', '.click', '.link', '.support', '.review', '.zip', '.mov'
-]
 
-def extract_domain_features(url):
-    parsed_url = urlparse(url)
-    domain = parsed_url.netloc
-
-    subdomains = domain.split('.')
-
-    domain_length = len(domain)
-    num_subdomains = len(subdomains) - 2 
-    has_hyphen = int('-' in domain)
-    tld = '.' + subdomains[-1] if len(subdomains) > 1 else ''
-    suspicious_tld = int(tld in suspicious_tlds)
-    
-    return {
-        'domain_length': domain_length,
-        'num_subdomains': num_subdomains,
-        'has_hyphen': has_hyphen,
-        'suspicious_tld': suspicious_tld
-    }
-
-def get_dns_record_count(domain):
-    record_types = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA']
-    total_records = 0
-    
+def extract_url_features(url: str) -> dict:
+    p = urlsplit(url)
+    host = p.hostname or ""
+    domain = _SUFFIXES(host)
     try:
-        for record in record_types:
-            try:
-                answers = dns.resolver.resolve(domain, record, raise_on_no_answer=False)
-                if answers:
-                    total_records += len(answers)
-            except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
-                pass
-    
-    except Exception as e:
-        print(f"DNS Error: {e}")
-        total_records = 0
-    
-    return {'dns_record_count': total_records}
-def check_spf_dmarc(domain):
-    spf_present = 0
-    dmarc_present = 0
-    
-    try:
-        answers = dns.resolver.resolve(domain, 'TXT', raise_on_no_answer=False)
-        for txt in answers:
-            if txt.to_text().startswith('"v=spf1'):
-                spf_present = 1
-                break
-    except Exception as e:
-        spf_present = 0
-    
-    try:
-        dmarc_domain = f"_dmarc.{domain}"
-        answers = dns.resolver.resolve(dmarc_domain, 'TXT', raise_on_no_answer=False)
-        for txt in answers:
-            if txt.to_text().startswith('"v=DMARC1'):
-                dmarc_present = 1
-                break
-    except Exception as e:
-        dmarc_present = 0
-    
-    return {'spf_present': spf_present, 'dmarc_present': dmarc_present}
-
-def extract_content_features(url):
-    try:
-        response = requests.get(url, timeout=5)
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        num_forms = len(soup.find_all('form'))
-
-        hidden_iframes = len(soup.find_all('iframe', style=re.compile(r'display:\s*none')))
-
-        script_content = ' '.join([script.text for script in soup.find_all('script')])
-        eval_count = script_content.count('eval(')
-        escape_count = script_content.count('escape(')
-        settimeout_count = script_content.count('setTimeout(')
-
-        external_links = sum(1 for a in soup.find_all('a', href=True) if url not in a['href'])
-
-        return {
-            'num_forms': num_forms,
-            'hidden_iframes': hidden_iframes,
-            'eval_count': eval_count,
-            'escape_count': escape_count,
-            'settimeout_count': settimeout_count,
-            'external_links': external_links
-        }
-    
-    except Exception as e:
-        return {
-            'num_forms': -1,
-            'hidden_iframes': -1,
-            'eval_count': -1,
-            'escape_count': -1,
-            'settimeout_count': -1,
-            'external_links': -1
-        }
-
-def extract_redirection_count(url):
-    try:
-        response = requests.get(url, allow_redirects=True, timeout=5)
-        redirection_count = len(response.history)
-        final_url = response.url
-        
-        return {
-            'redirection_count': redirection_count,
-            'final_domain': final_url.split('/')[2] if '//' in final_url else final_url
-        }
-    except Exception as e:
-        print(f"Request Error: {e}")
-        return {
-            'redirection_count': -1,
-            'final_domain': 'Unknown'
-        }
-def is_shortened_url(url):
-    shorteners = [
-        'bit.ly', 'goo.gl', 'tinyurl.com', 'ow.ly', 'buff.ly',
-        'is.gd', 't.co', 'shorte.st', 'cutt.ly', 'adf.ly'
-    ]
-    
-    try:
-        domain = url.split('/')[2] if '//' in url else url.split('/')[0]
-        if domain in shorteners:
-            return {'is_shortened': 1}
-        else:
-            return {'is_shortened': 0}
-    except Exception as e:
-        print(f"Error: {e}")
-        return {'is_shortened': -1}
-
-def get_domain_age(url):
-    try:
-        domain = url.split('/')[2] if '//' in url else url.split('/')[0]
-        w = whois.whois(domain)
-        
-        creation_date = w.creation_date
-        if isinstance(creation_date, list): 
-            creation_date = creation_date[0]
-        
-        if creation_date:
-            age = (datetime.now() - creation_date).days
-        else:
-            age = -1
-        if age < 50:
-            print("likely a suspicious website")
-            return {'domain_age_days': age}
-        if age > 50:
-            return {'domain_age_days': age}
-        else :
-            return {'domain_age_days': "error"}
-    except Exception as e:
-        print(f"Error: {e}")
-        return {'domain_age_days': -1}
-    
-ssl_context = ssl.create_default_context()
-
-def get_certificate_info(url):
-    try:
-        parsed_url = urlparse(url)
-        
-        # Skip if not HTTPS
-        if parsed_url.scheme != 'https':
-            return {
-                'cert_issuer': 'No SSL (HTTP only)',
-                'cert_validity_days': 0,
-                'days_to_expiry': 0,
-                'is_self_signed': 0
-            }
-
-        hostname = parsed_url.netloc or parsed_url.path  # fallback if netloc is empty
-
-        context = ssl.create_default_context()
-
-        with socket.create_connection((hostname, 443), timeout=5) as sock:
-            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-                cert = ssock.getpeercert()
-
-                issuer = dict(x[0] for x in cert['issuer']).get('organizationName', 'Unknown')
-                valid_from = datetime.strptime(cert['notBefore'], '%b %d %H:%M:%S %Y %Z')
-                valid_to = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-                days_to_expiry = (valid_to - datetime.utcnow()).days
-
-                is_self_signed = issuer == dict(x[0] for x in cert['subject']).get('organizationName', '')
-
-                return {
-                    'cert_issuer': issuer,
-                    'cert_validity_days': (valid_to - valid_from).days,
-                    'days_to_expiry': days_to_expiry,
-                    'is_self_signed': int(is_self_signed)
-                }
-
-    except Exception as e:
-        return {
-            'cert_issuer': f'Error: {str(e)}',
-            'cert_validity_days': 0,
-            'days_to_expiry': 0,
-            'is_self_signed': 0
-        }
-    
-def check_google_safe_browsing(url):
-    API_KEY = os.environ.get("SAFE_BROWSING_API_KEY", "")
-    if not API_KEY:
-        return {"safe_browsing_flag": -1}
-    api_url = f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={API_KEY}"
-    body = {
-        "client": {
-            "clientId": "your-app-name",
-            "clientVersion": "1.0"
-        },
-        "threatInfo": {
-            "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"],
-            "platformTypes": ["ANY_PLATFORM"],
-            "threatEntryTypes": ["URL"],
-            "threatEntries": [
-                {"url": url}
-            ]
-        }
-    }
-
-    try:
-        response = requests.post(api_url, json=body)
-        if response.status_code == 200:
-            result = response.json()
-            is_unsafe = "matches" in result
-            return {"safe_browsing_flag": 0 if is_unsafe else 1}
-        else:
-            print("Safe Browsing API error:", response.text)
-            return {"safe_browsing_flag": -1}
-    except Exception as e:
-        print("Safe Browsing check failed:", e)
-        return {"safe_browsing_flag": -1}
+        ipaddress.ip_address(host)
+        has_ip = True
+    except ValueError:
+        has_ip = False
+    query = parse_qsl("&".join(p.query.split("&")[:200]), keep_blank_values=True, max_num_fields=200)
+    return {"length": len(url), "num_dots": url.count("."), "num_slashes": url.count("/"),
+            "num_subdomains": len(domain.subdomain.split(".")) if domain.subdomain else 0,
+            "has_ip": has_ip, "has_http": p.scheme == "http", "has_https": p.scheme == "https", "has_at": "@" in url,
+            "tld": domain.suffix, "hostname": host, "path_depth": len([s for s in p.path.split("/") if s]),
+            "query_count": len(p.query.split("&")) if p.query else 0, "query_keys": [key[:100] for key, _ in query], "encoded_characters": len(re.findall(r"%[a-fA-F0-9]{2}", url)),
+            "url_entropy": entropy(url), "punycode": "xn--" in host}
 
 
-VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
-def check_url_virustotal(url):
-    if not VIRUSTOTAL_API_KEY:
-        return {"error": "VirusTotal API key not configured"}
-    headers = {
-        "x-apikey": VIRUSTOTAL_API_KEY,
-        "Accept": "application/json"
-    }
-    
-    try:
-        # First, check if the URL has already been analyzed
-        url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
-        report_response = requests.get(
-            f"https://www.virustotal.com/api/v3/urls/{url_id}",
-            headers=headers
-        )
-        
-        # If URL not found (404), submit it for analysis
-        if report_response.status_code == 404:
-            submit_response = requests.post(
-                "https://www.virustotal.com/api/v3/urls",
-                headers=headers,
-                data={"url": url}
-            )
-            
-            if submit_response.status_code == 200:
-                # Wait for analysis to complete (VirusTotal recommends 15 seconds)
-                time.sleep(15)
-                # Get the report after submission
-                report_response = requests.get(
-                    f"https://www.virustotal.com/api/v3/urls/{url_id}",
-                    headers=headers
-                )
+def extract_keyword_features(url: str) -> dict:
+    tokens = set(re.findall(r"[a-z]+", unquote(url).lower()))
+    matched = sorted(tokens.intersection({"login", "signin", "verify", "secure", "account", "bank", "password", "payment", "billing", "wallet", "urgent", "suspended", "update", "confirm", "credential"}))
+    return {"keyword_count": len(matched), "matched": matched, **{"has_" + k: k in tokens for k in ("login", "verify", "bank", "account", "secure", "update")}}
+
+
+def extract_domain_features(url: str) -> dict:
+    host = urlsplit(url).hostname
+    parts = _SUFFIXES(host)
+    return {"hostname": host, "registered_domain": registered_domain(host), "subdomains": parts.subdomain.split(".") if parts.subdomain else [],
+            "domain_length": len(host), "num_subdomains": len(parts.subdomain.split(".")) if parts.subdomain else 0,
+            "has_hyphen": "-" in host, "suspicious_tld": parts.suffix in {"tk", "cf", "ml", "ga", "gq", "top", "buzz", "icu", "click"}, "tld": parts.suffix}
+
+
+def analyze_url_structure(url: str) -> dict:
+    p = urlsplit(url)
+    host = p.hostname
+    parts = _SUFFIXES(host)
+    return {"hyphen_count": host.count("-"), "subdomain_depth": len(parts.subdomain.split(".")) if parts.subdomain else 0,
+            "entropy": entropy(parts.domain), "digit_ratio": round(sum(c.isdigit() for c in host) / max(1, len(host)), 3),
+            "path_depth": len([s for s in p.path.split("/") if s]),
+            "has_encoded_chars": bool(re.search(r"%(?:2f|3a|40|25)", url, re.I)), "has_double_extension": bool(re.search(r"\.(?:pdf|docx?|jpg|png)\.(?:exe|scr|js)$", p.path, re.I)),
+            "embedded_url": bool(re.search(r"https?://", unquote(p.path + p.query), re.I))}
+
+
+def is_shortened_url(url: str) -> dict:
+    return {"is_shortened": urlsplit(url).hostname in {"bit.ly", "goo.gl", "tinyurl.com", "ow.ly", "buff.ly", "is.gd", "t.co", "cutt.ly", "adf.ly"}}
+
+
+def detect_brand_impersonation(url: str, title: str = "", has_credentials: bool = False) -> dict:
+    host = urlsplit(url).hostname
+    parts = _SUFFIXES(host)
+    brand_tokens = re.findall(r"[a-z]+", (parts.subdomain + "." + parts.domain).lower())
+    candidates = []
+    for brand, official in LEGITIMATE_BRANDS.items():
+        if any(host == d or host.endswith("." + d) for d in official):
+            continue
+        host_claim = brand in brand_tokens or parts.domain.startswith(brand + "-")
+        title_claim = has_credentials and bool(re.search(r"\b" + re.escape(brand) + r"\b", title, re.I))
+        if host_claim or title_claim:
+            candidates.append({"brand": brand, "source": "hostname" if host_claim else "page title + credential form", "observed": host if host_claim else title[:200], "known_domains": official})
+    # Candidate identity mismatch is an inference, never proof of impersonation.
+    return {"is_impersonating": bool(candidates), "impersonated_brands": [c["brand"] for c in candidates], "brand_count": len(candidates), "candidates": candidates, "label": "Potential identity mismatch"}
+
+
+def get_dns_record_count(url: str, target=None, deadline: float | None = None) -> dict:
+    target = target or resolve_target(url, deadline)
+    result = {"status": "completed", "hostname": target.hostname, "addresses": target.addresses,
+              "records": {"A": [ip for ip in target.addresses if ":" not in ip], "AAAA": [ip for ip in target.addresses if ":" in ip]}, "errors": {}}
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 0.8
+    for kind in ("MX", "NS", "TXT"):
+        remaining = min(0.8, deadline - time.monotonic()) if deadline else 0.8
+        if remaining <= 0:
+            result["errors"][kind] = "Scan time budget exhausted"
+            continue
+        try:
+            result["records"][kind] = [str(item)[:500] for item in resolver.resolve(target.hostname, kind, lifetime=remaining, search=False)][:25]
+        except dns.resolver.NoAnswer:
+            result["records"][kind] = []
+        except dns.exception.DNSException:
+            result["errors"][kind] = "Lookup unavailable"
+    result["dns_record_count"] = sum(len(values) for values in result["records"].values())
+    if result["errors"]:
+        result["status"] = "partial"
+    return result
+
+
+def check_spf_dmarc(url: str, dns_info: dict | None = None, deadline: float | None = None) -> dict:
+    host = registered_domain(urlsplit(url).hostname)
+    resolver = dns.resolver.Resolver()
+    result = {"status": "completed", "spf_present": None, "dmarc_present": None, "domain": host}
+    for name, query, prefix in (("spf_present", host, "v=spf1"), ("dmarc_present", "_dmarc." + host, "v=DMARC1")):
+        remaining = min(0.8, deadline - time.monotonic()) if deadline else 0.8
+        if remaining <= 0:
+            result["status"] = "partial"
+            continue
+        try:
+            if name == "spf_present" and dns_info and dns_info["hostname"] == host and "TXT" in dns_info["records"]:
+                texts = dns_info["records"]["TXT"]
             else:
-                print(f"\n❌ Error submitting URL. Status Code: {submit_response.status_code}")
-                print(submit_response.text)
-                return {"error": f"Submission failed with status code {submit_response.status_code}"}
-        
-        # Process the report
-        if report_response.status_code == 200:
-            try:
-                data = report_response.json()
-                stats = data["data"]["attributes"]["last_analysis_stats"]
-                
-                return {
-                    "malicious": stats.get("malicious", 0),
-                    "suspicious": stats.get("suspicious", 0),
-                    "harmless": stats.get("harmless", 0),
-                    "undetected": stats.get("undetected", 0),
-                    "timeout": stats.get("timeout", 0),
-                    "total": sum(stats.values())
-                }
-            except (KeyError, TypeError) as e:
-                print(f"\n⚠ Unexpected response format: {e}")
-                print(report_response.json())
-                return {"error": "Unexpected response structure"}
-        elif report_response.status_code == 429:
-            print("\n⚠ Rate limit exceeded. Please wait before making more requests.")
-            return {"error": "Rate limit exceeded"}
-        else:
-            print(f"\n❌ Error getting report. Status Code: {report_response.status_code}")
-            print(report_response.text)
-            return {"error": f"Report retrieval failed with status code {report_response.status_code}"}
-
-    except requests.exceptions.RequestException as e:
-        print(f"\n❌ Network error during VirusTotal check: {e}")
-        return {"error": f"Network error: {str(e)}"}
-    except Exception as e:
-        print(f"\n❌ Unexpected error during VirusTotal check: {e}")
-        return {"error": str(e)}
-    
-def calculate_risk_score(features):
-    """
-    Advanced phishing risk scoring engine.
-    
-    Key principle: FAILED feature extractions (value = -1) indicate the site
-    is unreachable, has no DNS, or no SSL — which is ITSELF suspicious.
-    The old engine treated failures as neutral (0 risk). Now they add risk.
-    """
-    score = 0
-    
-    # ── 0. TEST SIGNATURES & EXPLICIT PHISHING KEYWORDS ──────────
-    url_lower = features.get('_original_url', '').lower()
-    # Explicitly check for known security test domains/signatures
-    if 'phishing-page' in url_lower or 'check-phishing' in url_lower or 'phishing-test' in url_lower or 'phishing-simulation' in url_lower or 'amtso.org' in url_lower or 'wicar.org' in url_lower:
-        score += 45
-    elif 'phishing' in url_lower or 'malware' in url_lower:
-        score += 40
-    
-    # ── 1. CRITICAL SIGNALS (instant high-risk) ──────────────────
-    
-    # IP address in URL (almost always phishing)
-    if features['url']['has_ip']:
-        score += 30
-    
-    # @ symbol in URL (credential harvesting technique)
-    if features['url']['has_at']:
-        score += 30
-    
-    # Brand impersonation (URL mimics a real brand but isn't the real domain)
-    brand_info = features.get('brand_impersonation', {})
-    if brand_info.get('is_impersonating', False):
-        score += 40  # Very strong signal
-        # Multiple brands in one URL is even worse
-        if brand_info.get('brand_count', 0) > 1:
-            score += 15
-    
-    # ── 2. URL KEYWORD ANALYSIS ──────────────────────────────────
-    
-    kw = features['keywords']
-    
-    # Each dangerous keyword combo is a strong signal
-    score += kw.get('dangerous_combos', 0) * 25
-    
-    # General keyword density (capped contribution)
-    keyword_score = min(kw['keyword_count'] * 3, 20)
-    score += keyword_score
-    
-    # Individual strong signals from keywords
-    if kw['has_login'] and kw['has_bank']:
-        score += 25
-    if kw['has_verify'] and kw['has_bank']:
-        score += 25
-    if kw.get('has_account', 0) and kw.get('has_suspend', 0):
-        score += 25
-    if kw.get('has_secure', 0) and kw['has_login']:
-        score += 15
-    if kw.get('has_update', 0) and kw.get('has_account', 0):
-        score += 20
-    
-    # ── 3. URL STRUCTURE ANALYSIS ────────────────────────────────
-    
-    structure = features.get('url_structure', {})
-    
-    # Multiple hyphens in domain (e.g., bank-login-verify-secure.com)
-    hyphen_count = structure.get('hyphen_count', 0)
-    if hyphen_count >= 3:
-        score += 20
-    elif hyphen_count >= 2:
-        score += 12
-    elif hyphen_count >= 1:
-        score += 5
-    
-    # Deep subdomains (e.g., login.bank.secure.evil.com)
-    subdomain_depth = structure.get('subdomain_depth', 0)
-    if subdomain_depth >= 3:
-        score += 15
-    elif subdomain_depth >= 2:
-        score += 8
-    
-    # High entropy in domain (random-looking strings)
-    entropy = structure.get('entropy', 0)
-    if entropy > 4.0:
-        score += 10
-    
-    # High digit ratio in domain
-    if structure.get('digit_ratio', 0) > 0.3:
-        score += 10
-    
-    # Suspicious path keywords
-    path_kw = structure.get('path_keyword_count', 0)
-    score += min(path_kw * 8, 20)
-    
-    # Deceptive URL patterns
-    if structure.get('has_data_uri', 0):
-        score += 25
-    if structure.get('has_encoded_chars', 0):
-        score += 10
-    if structure.get('has_double_extension', 0):
-        score += 15
-    
-    # ── 4. PROTOCOL ANALYSIS ─────────────────────────────────────
-    
-    # HTTP without HTTPS
-    if features['url']['has_http'] and not features['url']['has_https']:
-        score += 15
-    
-    # ── 5. DOMAIN FEATURES ───────────────────────────────────────
-    
-    # Suspicious TLD
-    if features['domain']['suspicious_tld']:
-        score += 25
-    
-    # ── 6. SSL CERTIFICATE ───────────────────────────────────────
-    
-    cert = features['certificate']
-    if isinstance(cert, dict):
-        if cert.get('is_self_signed'):
-            score += 20
-        
-        days_to_expiry = cert.get('days_to_expiry', 0)
-        if days_to_expiry == 0 and not cert.get('issuer'):
-            # SSL completely failed — site has no valid cert
-            score += 15
-        elif 0 < days_to_expiry < 30:
-            score += 10
-        
-        # Check for errors (no SSL at all is suspicious for sites with keywords)
-        if cert.get('error') and kw['keyword_count'] > 0:
-            score += 12
-    
-    # ── 7. DOMAIN AGE ────────────────────────────────────────────
-    
-    domain_age = features['domain_age'].get('domain_age_days', -1)
-    if domain_age == -1 or domain_age == 'error':
-        # Can't determine age — suspicious if URL has keywords
-        if kw['keyword_count'] > 0:
-            score += 10
-    elif isinstance(domain_age, (int, float)):
-        if domain_age < 30:
-            score += 20
-        elif domain_age < 90:
-            score += 10
-        elif domain_age < 180:
-            score += 5
-    
-    # ── 8. CONTENT ANALYSIS ──────────────────────────────────────
-    
-    content = features['content']
-    
-    # Content completely unreachable — suspicious if URL has phishing keywords
-    all_content_failed = all(
-        content.get(k, -1) == -1 
-        for k in ['hidden_iframes', 'eval_count', 'num_forms']
-    )
-    if all_content_failed and kw['keyword_count'] >= 2:
-        score += 15  # Unreachable + phishing keywords = suspicious
-    elif not all_content_failed:
-        # Content was reachable — check for suspicious elements
-        if content.get('hidden_iframes', 0) > 0:
-            score += 20
-        if content.get('eval_count', 0) > 0:
-            score += 12
-        if content.get('settimeout_count', 0) > 3:
-            score += 8
-        if content.get('num_forms', 0) > 3:
-            score += 10
-    
-    # ── 9. REDIRECTION ANALYSIS ──────────────────────────────────
-    
-    redir = features['redirection']
-    redir_count = redir.get('redirection_count', 0)
-    if redir_count > 5:
-        score += 15
-    elif redir_count > 3:
-        score += 10
-    elif redir_count > 1:
-        score += 5
-    
-    # Redirect to a different domain
-    if redir.get('final_domain', '') != 'Unknown':
-        parsed_original = urlparse(features.get('_original_url', ''))
-        orig_domain = parsed_original.netloc if parsed_original.netloc else ''
-        if redir['final_domain'] and orig_domain and redir['final_domain'] != orig_domain:
-            score += 10
-    
-    # ── 10. DNS & EMAIL SECURITY ─────────────────────────────────
-    
-    dns_count = features['dns'].get('dns_record_count', 0)
-    if dns_count == 0:
-        score += 10  # No DNS at all
-    elif dns_count < 2:
-        score += 5
-    
-    if not features['email'].get('spf_present', 0):
-        score += 5
-    if not features['email'].get('dmarc_present', 0):
-        score += 3
-    
-    # ── 11. URL SHORTENER ────────────────────────────────────────
-    
-    if features['shortener'].get('is_shortened', 0):
-        score += 10
-    
-    # ── 12. URL LENGTH ───────────────────────────────────────────
-    
-    url_length = features['url'].get('length', 0)
-    if url_length > 150:
-        score += 10
-    elif url_length > 100:
-        score += 5
-    
-    # ── 13. EXTERNAL INTELLIGENCE ────────────────────────────────
-    
-    # VirusTotal (strongest external signal)
-    vt = features.get('virus_total', {})
-    if isinstance(vt, dict) and 'error' not in vt:
-        if vt.get('malicious', 0) > 0:
-            score += 90
-        elif vt.get('suspicious', 0) > 0:
-            score += 50
-    
-    # Google Safe Browsing
-    gsb = features.get('google_safe_browsing', {})
-    if isinstance(gsb, dict):
-        if gsb.get('safe_browsing_flag') == 0:
-            score += 80
-    
-    # ── FINAL: Normalize to 100 ──────────────────────────────────
-    return min(score, 100)
+                texts = [str(r) for r in resolver.resolve(query, "TXT", lifetime=remaining, search=False)]
+            result[name] = any(prefix.lower() in text.lower() for text in texts)
+        except dns.resolver.NoAnswer:
+            result[name] = False
+        except dns.exception.DNSException:
+            result["status"] = "partial"
+    return result  # Missing mail records do not establish phishing.
 
 
-def analyze_url(url):
-    """Extract all features from a URL for phishing detection."""
-    features = {
-        'certificate': get_certificate_info(url),
-        'url': extract_url_features(url),
-        'keywords': extract_keyword_features(url),
-        'content': extract_content_features(url),
-        'domain': extract_domain_features(url),
-        'dns': get_dns_record_count(url),
-        'email': check_spf_dmarc(url),
-        'redirection': extract_redirection_count(url),
-        'shortener': is_shortened_url(url),
-        'domain_age': get_domain_age(url),
-        'virus_total': check_url_virustotal(url),
-        'google_safe_browsing': check_google_safe_browsing(url),
-        # New advanced detectors
-        'brand_impersonation': detect_brand_impersonation(url),
-        'url_structure': analyze_url_structure(url),
-        '_original_url': url  # Keep original for redirect comparison
-    }
+def get_domain_age(url: str, deadline: float | None = None) -> dict:
+    host = registered_domain(urlsplit(url).hostname)
+    try:
+        ipaddress.ip_address(host)
+        return {"status": "not_applicable", "domain_age_days": None}
+    except ValueError:
+        pass
+    source = "https://rdap.org/domain/" + host
+    try:
+        response = fetch_website(source, min(deadline or time.monotonic() + 3, time.monotonic() + 3), max_bytes=256 * 1024, max_redirects=3)
+        import json
+        if response["status_code"] != 200 or response["truncated"]:
+            raise ValueError()
+        record = json.loads(response["body"])
+        events = record.get("events", [])
+        for event in events:
+            if event.get("eventAction") == "registration":
+                created = datetime.fromisoformat(event["eventDate"].replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - created).days
+                if age < 0:
+                    raise ValueError()
+                return {"status": "completed", "domain_age_days": age, "registered_at": created.isoformat(), "registered_domain": host, "source": response["final_url"]}
+        return {"status": "unavailable", "domain_age_days": None, "reason": "Registration date not supplied by RDAP.", "source": source}
+    except (ScanError, ValueError, TypeError, KeyError, AttributeError):
+        return {"status": "unavailable", "domain_age_days": None, "reason": "RDAP registration information unavailable.", "source": source}
+
+
+def get_certificate_info(url: str) -> dict:
+    # Compatibility helper: full scan reuses the certificate from its existing connection.
+    try:
+        return fetch_website(url, time.monotonic() + 6, max_bytes=1)["tls"]
+    except ScanError as exc:
+        return {"status": "unavailable", "verified": None, "reason": str(exc)}
+
+
+def destination(raw: str, base: str) -> dict:
+    try:
+        resolved = urljoin(base, raw.strip())
+        p = urlsplit(resolved)
+        base_host = urlsplit(base).hostname
+        host = (p.hostname or "").lower()
+        if len(host) > 253:
+            raise ValueError("Invalid referenced hostname")
+    except ValueError:
+        return {"url": raw[:2000], "scheme": "invalid", "hostname": "", "external": False, "internal_literal": False}
+    internal = host == "localhost" or host.endswith((".local", ".internal", ".localhost"))
+    try:
+        internal = internal or not public_ip(host)
+    except ValueError:
+        pass
+    return {"url": resolved[:2000], "scheme": p.scheme, "hostname": host, "external": bool(host and not same_site(host, base_host)), "internal_literal": internal}
+
+
+JS_PATTERNS = {
+    "eval": r"\beval\s*\(", "encoded_payload": r"\batob\s*\(|(?:\\x[0-9a-fA-F]{2}){8,}|(?:\\u[0-9a-fA-F]{4}){8,}",
+    "dynamic_code": r"\bnew\s+Function\s*\(", "document_write": r"\bdocument\.write\s*\(",
+    "dynamic_navigation": r"(?:window\.)?location\.(?:href\s*=|replace\s*\(|assign\s*\()",
+    "form_handling": r"\b(?:submit|onsubmit|FormData)\b", "network_send": r"\b(?:fetch|XMLHttpRequest|sendBeacon)\s*\("}
+
+
+def inspect_javascript(text: str, source: str, base: str) -> dict:
+    indicators = []
+    for name, pattern in JS_PATTERNS.items():
+        matches = list(re.finditer(pattern, text))
+        if matches:
+            indicators.append({"type": name, "count": len(matches), "samples": [text[max(0, m.start() - 30):m.end() + 60][:140] for m in matches[:2]]})
+    destinations = sorted(set(re.findall(r"https?://[^\s'\"<>`\\)]+", text)))[:30]
+    return {"source": source, "bytes_inspected": len(text.encode()), "indicators": indicators, "destinations": [destination(d, base) for d in destinations]}
+
+
+def parse_content(response: dict, deadline: float | None = None) -> dict:
+    base = response["final_url"]
+    charset = re.search(r"charset=([\w-]+)", response["headers"].get("content-type", ""), re.I)
+    try:
+        text = response["body"].decode(charset.group(1) if charset else "utf-8", errors="replace")
+    except LookupError:
+        text = response["body"].decode("utf-8", errors="replace")
+    soup = BeautifulSoup(text, "html.parser")
+    initial_title = soup.title.get_text(" ", strip=True)[:300] if soup.title else ""
+    blocked_title = bool(re.search(r"(?:your request has been blocked|access denied|request blocked|just a moment|attention required|verify you are human|security verification)", initial_title, re.I))
+    if soup.base and soup.base.get("href"):
+        # Malformed untrusted base URLs cannot turn a successful fetch into a 500.
+        try:
+            candidate = urljoin(base, soup.base["href"])
+            urlsplit(candidate)
+            base = candidate
+        except ValueError:
+            pass
+    all_forms = soup.find_all("form")
+    forms, resources, javascript, iframes = [], [], [], []
+    all_inputs = soup.find_all("input")
+    for i, form in enumerate(all_forms[:50]):
+        inputs = form.find_all("input")
+        password = sum(el.get("type", "text").lower() == "password" for el in inputs)
+        payment = sum(bool(re.search(r"(?:cc-number|cc-csc|cc-exp|card.?number|card.?no|credit.?card|cvv|cvc)", " ".join(str(el.get(k, "")) for k in ("name", "id", "autocomplete")), re.I)) for el in inputs)
+        actions = [destination(form.get("action", "") or response["final_url"], base)]
+        actions.extend(destination(el["formaction"], base) for el in form.find_all(attrs={"formaction": True}))
+        # Compare the actual page host, even if a remote <base> changes URL resolution.
+        for action in actions:
+            action["external"] = bool(action["hostname"] and not same_site(action["hostname"], urlsplit(response["final_url"]).hostname))
+            action["cross_hostname"] = bool(action["hostname"] and action["hostname"] != urlsplit(response["final_url"]).hostname)
+        forms.append({"id": f"form-{i + 1}", "method": str(form.get("method", "get")).lower(), "actions": actions[:20], "password_fields": password,
+                      "payment_fields": payment, "input_types": dict(Counter(el.get("type", "text").lower() for el in inputs)),
+                      "hidden_inputs": sum(el.get("type", "").lower() == "hidden" for el in inputs)})
+    for i, frame in enumerate(soup.find_all("iframe")[:100]):
+        style = re.sub(r"\s+", "", frame.get("style", "").lower())
+        hidden = frame.has_attr("hidden") or "display:none" in style or "visibility:hidden" in style or str(frame.get("width")) == "0" or str(frame.get("height")) == "0"
+        iframes.append({"id": f"iframe-{i+1}", **destination(frame.get("src", ""), base), "hidden": hidden})
+    all_scripts = soup.find_all("script")
+    for i, script in enumerate(all_scripts[:100]):
+        if script.get("src"):
+            resources.append({"id": f"script-{i+1}", "kind": "script", **destination(script["src"], base), "integrity": bool(script.get("integrity"))})
+        elif script.get("type", "").lower() not in {"application/ld+json", "application/json"}:
+            javascript.append(inspect_javascript(script.get_text()[:128 * 1024], f"inline-script-{i+1}", response["final_url"]))
+    for i, tag in enumerate(soup.find_all(["link", "img", "video", "audio", "source", "embed", "object"])[:300]):
+        value = tag.get("src") or tag.get("href") or tag.get("data")
+        if value:
+            resources.append({"id": f"resource-{i+1}", "kind": tag.name, **destination(value, base)})
+    links = [destination(a["href"], base) for a in soup.find_all("a", href=True)[:500]]
+    script_fetches = []
+    script_deadline = min(deadline or time.monotonic() + 6, time.monotonic() + 6)
+    fetched = set()
+    for resource in ([] if blocked_title else [r for r in resources if r["kind"] == "script"][:2]):
+        script_url = resource["url"]
+        if script_url in fetched:
+            continue
+        fetched.add(script_url)
+        if time.monotonic() >= script_deadline:
+            script_fetches.append({"url": script_url, "status": "skipped", "reason": "Script time budget exhausted"})
+            continue
+        try:
+            script_response = fetch_website(script_url, script_deadline, max_bytes=128 * 1024, max_redirects=2)
+            if 200 <= script_response["status_code"] < 300:
+                javascript.append(inspect_javascript(script_response["body"].decode("utf-8", errors="replace"), script_response["final_url"], response["final_url"]))
+                script_fetches.append({"url": script_url, "final_url": script_response["final_url"], "status": "partial" if script_response["truncated"] else "completed", "bytes": script_response["bytes_received"]})
+            else:
+                script_fetches.append({"url": script_url, "status": "unavailable", "reason": f"HTTP {script_response['status_code']}"})
+        except ScanError as exc:
+            script_fetches.append({"url": script_url, "status": exc.code, "reason": str(exc)})
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    title = soup.title.get_text(" ", strip=True)[:300] if soup.title else ""
+    visible_text = soup.get_text(" ", strip=True)[:4000]
+    metas = [{"name": tag.get("name") or tag.get("property") or tag.get("http-equiv", ""), "content": str(tag.get("content", ""))[:500]} for tag in soup.find_all("meta")[:40]]
+    refresh = [m for m in metas if m["name"].lower() == "refresh"]
+    refresh_targets = []
+    for meta in refresh:
+        match = re.search(r"url\s*=\s*(.+)", meta["content"], re.I)
+        if match:
+            refresh_targets.append(destination(match.group(1).strip(" '\""), base))
+    all_destinations = links + resources + iframes + [a for f in forms for a in f["actions"]] + refresh_targets + [d for js in javascript for d in js["destinations"]]
+    external_domains = sorted({d["hostname"] for d in all_destinations if d["hostname"] and not same_site(d["hostname"], urlsplit(response["final_url"]).hostname)})
+    tracker_patterns = {"google-analytics.com": "Google Analytics", "googletagmanager.com": "Google Tag Manager", "connect.facebook.net": "Meta SDK", "doubleclick.net": "DoubleClick"}
+    trackers = [{"url": r["url"], "label": label} for r in resources for domain, label in tracker_patterns.items() if r["hostname"] == domain or r["hostname"].endswith("." + domain)]
+    return {"status": "blocked_by_target" if blocked_title else "partial" if response["truncated"] else "completed", "title": title, "text_excerpt": visible_text,
+            "num_forms": len(all_forms), "forms": forms, "password_fields": sum(el.get("type", "").lower() == "password" for el in all_inputs),
+            "payment_fields": sum(f["payment_fields"] for f in forms), "hidden_inputs": sum(el.get("type", "").lower() == "hidden" for el in all_inputs),
+            "iframes": iframes, "hidden_iframes": sum(f["hidden"] for f in iframes), "scripts_count": len(all_scripts), "resources": resources,
+            "links": links, "external_links": sum(link["external"] for link in links), "external_domains": external_domains,
+            "javascript": javascript, "script_fetches": script_fetches, "meta": metas, "meta_redirects": refresh_targets, "trackers": trackers,
+            "sample_limits": {"forms": 50, "iframes": 100, "scripts": 100, "resources": 300, "links": 500, "external_scripts_downloaded": 2},
+            "eval_count": sum(i["count"] for js in javascript for i in js["indicators"] if i["type"] == "eval")}
+
+
+def extract_content_features(url: str) -> dict:
+    try:
+        return parse_content(fetch_website(url))
+    except ScanError as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def extract_redirection_count(url: str) -> dict:
+    try:
+        response = fetch_website(url)
+        return {"status": "completed", "redirection_count": len(response["redirect_chain"]), "chain": response["redirect_chain"], "final_url": response["final_url"], "final_domain": urlsplit(response["final_url"]).hostname}
+    except ScanError as exc:
+        return {"status": "unavailable", "reason": str(exc), "chain": getattr(exc, "redirect_chain", [])}
+
+
+def analyze_url(url: str, on_event=None, deadline: float | None = None) -> dict:
+    deadline = deadline or time.monotonic() + 38
+    def event(stage, status="completed", detail=""):
+        if on_event:
+            on_event(stage, status, detail)
+    url = normalize_url(url)
+    event("URL validated", detail="HTTP/HTTPS on standard website ports; credentials and malformed hosts rejected")
+    features = {"_original_url": url, "url": extract_url_features(url), "keywords": extract_keyword_features(url), "domain": extract_domain_features(url),
+                "url_structure": analyze_url_structure(url), "shortener": is_shortened_url(url)}
+    try:
+        target = resolve_target(url, deadline)
+    except ScanError as exc:
+        if exc.code in {"blocked_destination", "invalid_url"}:
+            raise
+        target = None
+        features["dns"] = {"status": "unavailable", "reason": str(exc), "addresses": []}
+    if target:
+        features["dns"] = get_dns_record_count(url, target, min(deadline, time.monotonic() + 2.5))
+    event("DNS / host checked", features["dns"]["status"], ", ".join(features["dns"].get("addresses", [])) or features["dns"].get("reason", ""))
+    features["email"] = check_spf_dmarc(url, features["dns"] if target else None, min(deadline, time.monotonic() + 1.6)) if target else {"status": "unavailable", "spf_present": None, "dmarc_present": None}
+    response = None
+    try:
+        if not target:
+            raise ScanError("Website could not be resolved.", "dns_error")
+        response = fetch_website(url, min(deadline, time.monotonic() + 12), on_event=event, initial=target)
+        http_status = response["status_code"]
+        fetch_state = "blocked_by_target" if http_status in {401, 403, 407, 429, 451} else "http_error" if http_status >= 400 else "completed"
+        features["http"] = {k: response[k] for k in ("status_code", "headers", "final_url", "connected_ip", "bytes_received", "truncated")}
+        features["http"]["status"] = fetch_state
+        features["certificate"] = response["tls"]
+        features["redirection"] = {"status": "completed", "redirection_count": len(response["redirect_chain"]), "chain": response["redirect_chain"], "final_url": response["final_url"], "final_domain": urlsplit(response["final_url"]).hostname}
+        event("Website fetched", "partial" if response["truncated"] else fetch_state, f"HTTP {http_status}; {response['bytes_received']} bytes; {response['final_url']}")
+    except ScanError as exc:
+        features["http"] = {"status": exc.code, "reason": str(exc), "final_url": None}
+        features["certificate"] = {"status": "unavailable", "verified": None, "reason": str(exc)}
+        chain = getattr(exc, "redirect_chain", [])
+        features["redirection"] = {"status": "partial" if chain else "unavailable", "chain": chain, "redirection_count": len(chain), "reason": str(exc)}
+        event("Website fetch", exc.code, str(exc))
+    event("Redirects analyzed", features["redirection"]["status"], f"{len(features['redirection'].get('chain', []))} observed redirects")
+    if response and features["http"]["status"] == "completed" and ("html" in response["headers"].get("content-type", "").lower()):
+        features["content"] = parse_content(response, deadline)
+        if features["content"]["status"] == "blocked_by_target":
+            features["http"]["status"] = "blocked_by_target"
+            features["http"]["reason"] = "Target returned a block / verification page rather than its normal content."
+        event("HTML analyzed", features["content"]["status"], features["content"]["title"] or "No page title")
+        event("Forms / scripts / resources inspected", features["content"]["status"], f"{features['content']['num_forms']} forms; {features['content']['scripts_count']} scripts; static inspection only")
+    else:
+        features["content"] = {"status": "unavailable", "reason": "Website fetch failed, target blocked the request, or response was not HTML."}
+        event("HTML / scripts inspection", "skipped", features["content"]["reason"])
+    features["security_headers"] = {name: features["http"].get("headers", {}).get(name) for name in ("strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options", "referrer-policy", "permissions-policy")}
+    features["domain_age"] = get_domain_age(url, deadline) if target else {"status": "unavailable", "domain_age_days": None, "reason": "DNS unavailable"}
+    observed_age = features["domain_age"].get("domain_age_days")
+    event("Domain registration checked", features["domain_age"]["status"], str(observed_age) if observed_age is not None else features["domain_age"].get("reason", ""))
+    content = features["content"]
+    features["brand_impersonation"] = detect_brand_impersonation(features["http"].get("final_url") or url, content.get("title", ""), bool(content.get("password_fields") or content.get("payment_fields")))
+    # Avoid sending URLs rejected for private DNS to third party services.
+    if target:
+        features["virus_total"] = check_url_virustotal(url, deadline)
+        features["google_safe_browsing"] = check_google_safe_browsing(url, min(deadline, time.monotonic() + 5))
+    else:
+        features["virus_total"] = {"status": "skipped", "reason": "DNS validation unavailable"}
+        features["google_safe_browsing"] = {"status": "skipped", "safe_browsing_flag": None}
+    event("VirusTotal checked", features["virus_total"]["status"], f"{features['virus_total'].get('malicious', 'unavailable')} malicious detections")
+    event("Safe Browsing checked", features["google_safe_browsing"]["status"], "Configured threat lookup" if features["google_safe_browsing"]["status"] == "completed" else "No completed lookup")
     return features
+
+
+def calculate_risk_score(features: dict) -> int:
+    from risk_engine import assess_risk
+    return assess_risk(features)["score"]

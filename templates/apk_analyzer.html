@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>APK Analyzer - Catch The Phish</title>
+    <title>APK Analyzer - Phish-X AI</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon1.png') }}">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -205,7 +205,19 @@
                 padding: 1rem;
             }
         }
+
+        /* Targeted responsive fixes for the existing analyzer layout. */
+        .navigation { flex-wrap: wrap; }
+        .result-card, .file-name { overflow-wrap: anywhere; min-width: 0; }
+        @media(max-width:480px) {
+            .upload-section, .results-section, .upload-area { padding: 1rem; }
+            .result-card { padding: 1rem; }
+            .navigation .nav-button { width: 100%; justify-content: center; }
+            .logo { max-width: 100%; }
+        }
+        @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; transition-duration:.01ms!important; animation-iteration-count:1!important; } }
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/focus.css') }}">
 </head>
 
 <body>
@@ -218,12 +230,13 @@
         </header>
 
         <div class="upload-section">
-            <div class="upload-area" id="dropZone">
+            <div class="upload-area" id="dropZone" role="button" tabindex="0" aria-label="Choose file for analysis">
                 <i class="fas fa-file-upload upload-icon"></i>
                 <p class="upload-text">Drag and drop your APK file here or click to browse</p>
                 <p class="file-name" id="fileName" style="display: none; color: #ff0000; margin-top: 10px;"></p>
                 <input type="file" class="file-input" id="fileInput" accept=".apk">
             </div>
+            <p class="upload-text">Static inspection; {{ upload_limit_mb }} MB upload limit. Scripts and apps are not executed.</p>
             <button class="analyze-button" id="analyzeButton" disabled>Analyze APK</button>
         </div>
 
@@ -286,6 +299,7 @@
             const loading = document.getElementById('loading');
             const results = document.getElementById('results');
 
+            dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
             // Handle drag and drop
             dropZone.addEventListener('dragover', (e) => {
                 e.preventDefault();
@@ -304,7 +318,7 @@
                 dropZone.style.backgroundColor = 'transparent';
 
                 const file = e.dataTransfer.files[0];
-                if (file && file.name.endsWith('.apk')) {
+                if (file && file.name.toLowerCase().endsWith('.apk')) {
                     fileInput.files = e.dataTransfer.files;
                     analyzeButton.disabled = false;
 
@@ -325,7 +339,7 @@
             fileInput.addEventListener('change', () => {
                 if (fileInput.files.length > 0) {
                     const file = fileInput.files[0];
-                    if (file.name.endsWith('.apk')) {
+                    if (file.name.toLowerCase().endsWith('.apk')) {
                         analyzeButton.disabled = false;
 
                         // Show file name
@@ -348,20 +362,24 @@
 
                 loading.style.display = 'block';
                 results.style.display = 'none';
+                analyzeButton.disabled = true;
 
                 const formData = new FormData();
                 formData.append('apk', file);
 
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 45000);
                 try {
                     const response = await fetch('/analyze_apk', {
                         method: 'POST',
-                        body: formData
+                        body: formData,
+                        signal: controller.signal
                     });
 
                     const data = await response.json();
 
-                    if (data.error) {
-                        throw new Error(data.error);
+                    if (!response.ok || data.error) {
+                        throw new Error(data.error || `Request failed (${response.status}).`);
                     }
 
                     // Update results
@@ -372,8 +390,9 @@
                 } catch (error) {
                     console.error('Error:', error);
                     loading.style.display = 'none';
-                    alert(`Error analyzing APK: ${error.message || 'Unknown error'}`);
+                    alert(`Error analyzing APK: ${error.name === 'AbortError' ? 'Request timed out. Please retry.' : error.message || 'Unknown error'}`);
                 }
+                finally { clearTimeout(timeout); loading.style.display = 'none'; analyzeButton.disabled = false; }
             });
 
             function escapeHTML(str) {
@@ -406,6 +425,7 @@
                         .map(perm => `<li>${escapeHTML(perm)}</li>`)
                         .join('');
 
+                    data.security_analysis = [...(data.security_analysis || []), ...(data.limitations || [])];
                     // Update Security Analysis
                     const securityAnalysis = document.getElementById('securityAnalysis');
                     securityAnalysis.innerHTML = (data.security_analysis || [])

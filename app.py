@@ -1,1288 +1,478 @@
-from flask import Flask, request, jsonify, render_template, send_file
-import re
-import io
-from fpdf import FPDF
-from datetime import datetime, timedelta
-from flask_socketio import SocketIO
-import os
-import json
-from dotenv import load_dotenv
-load_dotenv()
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-import threading
-import queue
-import time
-from pymongo import MongoClient
-from werkzeug.utils import secure_filename
-import zipfile
-import xml.etree.ElementTree as ET
-from features_extract import (
-    extract_url_features,
-    extract_keyword_features,
-    extract_content_features,
-    extract_domain_features,
-    extract_redirection_count,
-    get_certificate_info,
-    get_domain_age,
-    get_dns_record_count,
-    check_spf_dmarc,
-    is_shortened_url,
-    analyze_url,
-    calculate_risk_score,
-    check_url_virustotal,
-    check_google_safe_browsing,
-    detect_brand_impersonation,
-    analyze_url_structure
-)
+"""Phish-X AI - existing Flask/Jinja application and route surface."""
+from __future__ import annotations
+
+from collections import defaultdict, deque
 import concurrent.futures
-from functools import partial, lru_cache
-from urllib.parse import urlparse
-import sqlite3
-from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+import json
+import hashlib
+import logging
+import os
+from pathlib import Path
+import re
+import secrets
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from urllib.parse import urlsplit
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / '.env.local')
+load_dotenv(Path(__file__).resolve().parent / '.env')
+from flask import Flask, jsonify, render_template, request, send_file, session, has_request_context, abort
+from flask_socketio import SocketIO
+from werkzeug.exceptions import HTTPException
 
+from ai_analysis import analyze_with_ai
+from features_extract import analyze_url, extract_content_features, get_dns_record_count, get_certificate_info, same_site
+from reports import build_report
+from risk_engine import assess_risk, attack_surface, relationship_graph
+from secure_fetch import ScanError, normalize_url
+from storage import ScanStore, SCHEMA_VERSION
+from threat_intelligence import configured_key, set_shared_vt_quota
 
+logging.basicConfig(level=os.getenv('LOG_LEVEL', 'INFO'), format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+log = logging.getLogger('phish_x')
+SERVERLESS = bool(os.getenv('VERCEL'))
 app = Flask(__name__, static_folder='static', template_folder='templates')
-socketio = SocketIO(app, cors_allowed_origins="*")
+app.config.update(SECRET_KEY=os.getenv('SECRET_KEY') or secrets.token_hex(32), MAX_CONTENT_LENGTH=(4 if SERVERLESS else 16) * 1024 * 1024,
+                  MAX_FORM_MEMORY_SIZE=512 * 1024, MAX_FORM_PARTS=20, JSON_SORT_KEYS=False,
+                  SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=SERVERLESS)
+if SERVERLESS:
+    app.config['SESSION_COOKIE_NAME'] = '__Host-phishx'
+# Same-origin SocketIO only. No background queue, workers, timers, or broadcasting scan data.
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins=None) if not SERVERLESS else None
+store = ScanStore()
+if SERVERLESS:
+    set_shared_vt_quota(lambda limit: store.rate_allowed('virustotal-account', limit))
+scan_slots = threading.BoundedSemaphore(3)
+upload_slots = threading.BoundedSemaphore(2)
+_rate_lock = threading.Lock()
+_rate = defaultdict(deque)
+_socket_lock = threading.Lock()
+_socket_owners = {}
 
-# Database URI configuration
-MONGO_URI = os.environ.get('MONGODB_URI', os.environ.get('MONGO_URI', 'mongodb://localhost:27018/'))
 
-@contextmanager
-def get_db_connection():
-    client = None
-    try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
-        client.admin.command('ping')
-        db = client['phishing_detection']
-        yield db
-    finally:
-        if client:
-            client.close()
+def visitor_id():
+    if not has_request_context():
+        return None  # Internal command-line tests only; HTTP callers always get a scope.
+    if not re.fullmatch(r'[a-f0-9]{32}', str(session.get('visitor_id', ''))):
+        session['visitor_id'] = secrets.token_hex(16)
+    return session['visitor_id']
 
-# MongoDB connection
-try:
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
-    client.admin.command('ping')
-    db = client['phishing_detection']
-except Exception as e:
-    print(f"Error connecting to MongoDB: {e}")
-    db = None
 
-# Mock database for testing
-mock_db = [
-    {
-        "url": "https://example-bank.com",
-        "title": "Example Bank",
-        "is_phishing": False,
-        "timestamp": (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'),
-        "risk_score": 15
-    },
-    {
-        "url": "https://suspicious-bank-login.com",
-        "title": "Bank Login",
-        "is_phishing": True,
-        "timestamp": (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S'),
-        "risk_score": 85
-    },
-    {
-        "url": "https://secure-banking.com",
-        "title": "Secure Banking",
-        "is_phishing": False,
-        "timestamp": (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S'),
-        "risk_score": 20
-    },
-    {
-        "url": "https://bank-verify-account.com",
-        "title": "Verify Your Account",
-        "is_phishing": True,
-        "timestamp": (datetime.now() - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S'),
-        "risk_score": 75
-    },
-    {
-        "url": "https://legitimate-bank.com",
-        "title": "Legitimate Bank",
-        "is_phishing": False,
-        "timestamp": (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d %H:%M:%S'),
-        "risk_score": 10
-    }
-]
+if socketio is not None:
+    @socketio.on('connect')
+    def connect_scan_progress():
+        with _socket_lock:
+            _socket_owners[request.sid] = visitor_id()
 
-# Queue for storing crawling results
-crawl_results = queue.Queue()
+    @socketio.on('disconnect')
+    def disconnect_scan_progress(reason=None):
+        with _socket_lock:
+            _socket_owners.pop(request.sid, None)
 
-# Favicon route
+
+def production_issues(check_connection=False):
+    issues = []
+    if len(os.getenv('SECRET_KEY', '')) < 32:
+        issues.append('Configure a stable random SECRET_KEY of at least 32 characters.')
+    if not (store.check_durable_connection() if check_connection else store.durable_available):
+        issues.append('Configure a reachable DATABASE_URL (Neon Postgres) or MONGODB_URI for durable scans and reports.')
+    return issues
+
+
+@app.before_request
+def guard_requests():
+    visitor_id()
+    if request.method == 'POST':
+        if request.content_length is not None and request.content_length > app.config['MAX_CONTENT_LENGTH']:
+            abort(413)
+        origin = request.headers.get('Origin')
+        try:
+            parsed_origin = urlsplit(origin) if origin else None
+        except ValueError:
+            return jsonify(error='Malformed Origin header.', code='forbidden_origin'), 403
+        if parsed_origin and (parsed_origin.netloc != request.host or parsed_origin.scheme != ('https' if SERVERLESS else request.scheme)):
+            return jsonify(error='Cross-origin requests are not allowed.', code='forbidden_origin'), 403
+        if request.path in {'/scan', '/index', '/bulk_scan', '/extract_features', '/crawl', '/analyze_apk', '/analyze_pdf'}:
+            address = request.headers.get('x-vercel-forwarded-for', request.remote_addr or 'unknown').split(',')[0].strip() if SERVERLESS else request.remote_addr or 'unknown'
+            now = time.monotonic()
+            with _rate_lock:
+                for key in list(_rate):
+                    if not _rate[key] or _rate[key][-1] < now - 60:
+                        del _rate[key]
+                entries = _rate[address]
+                while entries and entries[0] < now - 60:
+                    entries.popleft()
+                if len(entries) >= int(os.getenv('SCAN_REQUESTS_PER_MINUTE', '12')):
+                    return jsonify(error='Scan request limit reached. Try again in a minute.', code='rate_limited'), 429, {'Retry-After': '60'}
+                entries.append(now)
+            if SERVERLESS:
+                issues = production_issues()
+                if issues:
+                    return jsonify(error=' '.join(issues), code='configuration_required'), 503
+                # Vercel supplies this trusted client-IP header; never trust it locally.
+                identity = hashlib.sha256((app.config['SECRET_KEY'] + '|' + address).encode()).hexdigest()
+                if not store.rate_allowed(identity, int(os.getenv('SCAN_REQUESTS_PER_MINUTE', '12'))):
+                    return jsonify(error='Scan request limit reached. Try again in a minute.', code='rate_limited'), 429, {'Retry-After': '60'}
+
+
+@app.after_request
+def security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    if not request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'no-store'
+    if SERVERLESS:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    return response
+
+
+@app.errorhandler(HTTPException)
+def http_error(error):
+    messages = {413: 'Upload or request exceeds this deployment\'s size limit.', 415: 'Send a JSON object with Content-Type: application/json.', 400: 'Malformed request.', 404: 'Resource not found.'}
+    return jsonify(error=messages.get(error.code, error.name), code='http_error'), error.code
+
+
+@app.errorhandler(Exception)
+def unexpected_error(error):
+    log.exception('Unhandled application error')
+    return jsonify(error='Unexpected server error. Please retry.', code='server_error'), 500
+
+
+def json_body():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ScanError('Send a JSON object.', 'invalid_input')
+    return data
+
+
+def scan_error_response(error):
+    status = 403 if error.code == 'blocked_destination' else 503 if error.code in {'storage_unavailable', 'configuration_required'} else 400
+    return jsonify(error=str(error), code=error.code, state='rejected'), status
+
+
+def summary(result):
+    return {key: result.get(key) for key in ('scan_id', 'url', 'title', 'timestamp', 'risk_score', 'severity', 'assessment', 'state', 'is_phishing', 'verdict')}
+
+
 @app.route('/favicon.ico')
 def favicon():
-    return send_file(os.path.join(app.root_path, 'static', 'images', 'favicon1.png'), mimetype='image/png')
+    return send_file(Path(app.root_path) / 'static/images/favicon1.png', mimetype='image/png')
 
-# Home route
+
 @app.route('/')
+@app.route('/index', methods=['GET'])
 def home():
-    return render_template('index.html')
+    return render_template('index.html', socketio_enabled=socketio is not None)
 
-# Feature Extraction API
-@app.route('/index', methods=['POST'])
-def index():
-    try:
-        data = request.get_json()
-        if not data or not isinstance(data, dict):
-            return jsonify({"error": "Invalid JSON format."}), 400
-        url = data.get("url")
-
-        if not url:
-            return jsonify({"error": "URL is missing."}), 400
-
-        if not isinstance(url, str):
-            return jsonify({"error": "Invalid URL format."}), 400
-
-        # Extract all features and calculate risk score
-        features = analyze_url(url)
-        risk_score = calculate_risk_score(features)
-        is_phishing = risk_score >= 40
-
-        # Store in mock database with timestamp
-        scan_result = {
-            "url": url,
-            "title": url,
-            "is_phishing": is_phishing,
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "risk_score": risk_score
-        }
-        mock_db.append(scan_result)
-
-        # If MongoDB is available, store there too
-        if db is not None:
-            try:
-                db.bank_websites.insert_one({
-                    "url": url,
-                    "title": url,
-                    "is_phishing": "1" if is_phishing else "0",
-                    "crawled_at": datetime.now(),
-                    "confidence_score": risk_score
-                })
-            except Exception as e:
-                print(f"Error storing in MongoDB: {e}")
-
-        return jsonify({
-            "url": url,
-            "features": features,
-            "risk_score": risk_score,
-            "verdict": (
-                "Highly suspicious ⚠" if risk_score >= 70 else
-                "Moderately suspicious ⚠" if risk_score >= 40 else
-                "Likely safe ✅ (Still verify manually)"
-            )
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Get Crawled Data API
-@app.route('/get_data', methods=['GET'])
-def get_data():
-    try:
-        # Return last 50 entries from mock database
-        return jsonify({
-            "message": "Cleaned crawled data retrieved successfully",
-            "data": mock_db[-50:] if mock_db else []
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Generate and Download PDF Report API
-@app.route('/download_report', methods=['POST'])
-def download_report():
-    try:
-        data = request.get_json()
-        if not data or not isinstance(data, dict):
-            return jsonify({"error": "Invalid JSON format."}), 400
-        url = data.get("url")
-        if not url:
-            return jsonify({"error": "URL is missing"}), 400
-        if not isinstance(url, str):
-            return jsonify({"error": "Invalid URL format."}), 400
-
-        # Extract features and calculate risk score
-        features = analyze_url(url)
-        risk_score = calculate_risk_score(features)
-
-        # Create PDF
-        class PDF(FPDF):
-            def header(self):
-                # Set black background for the entire page
-                self.set_fill_color(0, 0, 0)
-                self.rect(0, 0, self.w, self.h, 'F')
-                
-                if self.page_no() == 1:
-                    # Add logo
-                    try:
-                        self.image('static/images/logo.png', 10, 8, 33)
-                    except:
-                        pass  # Continue if logo not found
-                    
-                    # Add decorative line
-                    self.set_draw_color(255, 0, 0)
-                    self.set_line_width(0.5)
-                    self.line(10, 45, self.w - 10, 45)
-                    
-                    self.set_text_color(255, 255, 255)  # White color for header
-                    self.set_font('Arial', 'B', 24)
-                    self.cell(0, 20, 'Website Security Report', 0, 1, 'C')
-                    
-                    # Add timestamp
-                    self.set_font('Arial', 'I', 10)
-                    self.cell(0, 10, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', 0, 1, 'C')
-                    self.ln(10)
-                else:
-                    # Compact header for page 2+
-                    try:
-                        self.image('static/images/logo.png', 10, 5, 20)
-                    except:
-                        pass
-                    
-                    self.set_draw_color(255, 0, 0)
-                    self.set_line_width(0.3)
-                    self.line(10, 18, self.w - 10, 18)
-                    
-                    self.set_text_color(255, 255, 255)
-                    self.set_font('Arial', 'B', 10)
-                    # Right-aligned title
-                    self.set_y(5)
-                    self.cell(0, 10, 'Website Security Report (Continued)', 0, 1, 'R')
-                    self.set_y(22)  # Reset y position below the running header
-
-            def footer(self):
-                self.set_y(-15)
-                # Add decorative line
-                self.set_draw_color(255, 0, 0)
-                self.set_line_width(0.5)
-                self.line(10, self.h - 20, self.w - 10, self.h - 20)
-                
-                self.set_text_color(255, 255, 255)  # White color for footer
-                self.set_font('Arial', 'I', 10)
-                self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
-
-            def create_table(self, headers, data, col_widths):
-                # Table header
-                self.set_fill_color(40, 40, 40)
-                self.set_text_color(255, 255, 255)  # White color for headers
-                self.set_font('Arial', 'B', 12)
-                self.set_draw_color(255, 0, 0)  # Red border
-                self.set_line_width(0.3)
-                
-                # Draw header cells with borders
-                for i, header in enumerate(headers):
-                    self.cell(col_widths[i], 10, header, 1, 0, 'C', True)
-                self.ln()
-
-                # Table data
-                self.set_text_color(255, 0, 0)  # Red color for data
-                self.set_font('Arial', '', 11)
-                for row in data:
-                    for i, value in enumerate(row):
-                        self.cell(col_widths[i], 10, str(value), 1, 0, 'L')
-                    self.ln()
-
-            def section_title(self, title):
-                # Check remaining space. If less than 50mm, start a new page
-                remaining_space = self.h - self.get_y() - 15
-                if remaining_space < 50:
-                    self.add_page()
-                else:
-                    self.ln(5)
-                
-                self.set_text_color(255, 255, 255)  # White color
-                self.set_font('Arial', 'B', 14)
-                self.cell(0, 10, title, 0, 1, 'L')
-                # Add decorative line under section title
-                self.set_draw_color(255, 0, 0)
-                self.set_line_width(0.3)
-                self.line(self.get_x(), self.get_y(), self.w - 10, self.get_y())
-                self.ln(5)
-
-        # Initialize PDF
-        pdf = PDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-        pdf.set_fill_color(0, 0, 0)  # Black background
-
-        # URL Section
-        pdf.section_title('Analyzed URL')
-        pdf.set_text_color(255, 0, 0)  # Red color for URL
-        pdf.set_font('Arial', '', 12)
-        pdf.cell(0, 10, str(url), 0, 1)
-        pdf.ln(5)
-
-        # Risk Score Section
-        pdf.section_title('Risk Analysis')
-
-        # Risk Level Box
-        pdf.set_draw_color(255, 0, 0)
-        pdf.set_line_width(0.5)
-        pdf.set_fill_color(20, 20, 20)
-        pdf.rect(10, pdf.get_y(), pdf.w - 20, 30, 'FD')
-        
-        if risk_score >= 70:
-            risk_color = (255, 0, 0)  # Red
-            risk_text = "High Risk"
-        elif risk_score >= 40:
-            risk_color = (255, 165, 0)  # Orange
-            risk_text = "Suspicious"
-        else:
-            risk_color = (0, 255, 0)  # Green
-            risk_text = "Safe"
-
-        pdf.set_text_color(*risk_color)
-        pdf.set_font('Arial', 'B', 14)
-        pdf.set_xy(15, pdf.get_y() + 5)
-        pdf.cell(0, 10, f'Risk Score: {risk_score}%', 0, 1)
-        pdf.set_xy(15, pdf.get_y())
-        pdf.cell(0, 10, f'Risk Level: {risk_text}', 0, 1)
-        pdf.ln(10)
-
-        # URL Features Table
-        pdf.section_title('URL Analysis')
-        url_headers = ['Feature', 'Value']
-        url_data = [
-            ['URL Length', features['url']['length']],
-            ['Number of Dots', features['url']['num_dots']],
-            ['Number of Slashes', features['url']['num_slashes']],
-            ['Number of Subdomains', features['url']['num_subdomains']],
-            ['Contains IP', 'Yes' if features['url']['has_ip'] else 'No'],
-            ['Uses HTTP', 'Yes' if features['url']['has_http'] else 'No'],
-            ['Uses HTTPS', 'Yes' if features['url']['has_https'] else 'No'],
-            ['Contains @ Symbol', 'Yes' if features['url']['has_at'] else 'No'],
-            ['TLD', features['url']['tld']]
-        ]
-        pdf.create_table(url_headers, url_data, [80, 110])
-
-        # Domain Information Table
-        pdf.section_title('Domain Information')
-        domain_headers = ['Feature', 'Value']
-        domain_data = [
-            ['Domain Length', features['domain']['domain_length']],
-            ['Number of Subdomains', features['domain']['num_subdomains']],
-            ['Contains Hyphen', 'Yes' if features['domain']['has_hyphen'] else 'No'],
-            ['Suspicious TLD', 'Yes' if features['domain']['suspicious_tld'] else 'No']
-        ]
-        pdf.create_table(domain_headers, domain_data, [80, 110])
-
-        # SSL Certificate Table
-        pdf.section_title('SSL Certificate Information')
-        ssl_headers = ['Feature', 'Value']
-        ssl_data = [
-            ['Certificate Issuer', features['certificate']['cert_issuer']],
-            ['Certificate Validity (Days)', features['certificate']['cert_validity_days']],
-            ['Days Until Expiry', features['certificate']['days_to_expiry']],
-            ['Self-Signed', 'Yes' if features['certificate']['is_self_signed'] else 'No']
-        ]
-        pdf.create_table(ssl_headers, ssl_data, [80, 110])
-
-        # Security Features Table
-        pdf.section_title('Security Features')
-        security_headers = ['Feature', 'Value']
-        security_data = [
-            ['SPF Present', 'Yes' if features['email']['spf_present'] else 'No'],
-            ['DMARC Present', 'Yes' if features['email']['dmarc_present'] else 'No'],
-            ['DNS Records Count', features['dns']['dns_record_count']],
-            ['Domain Age (Days)', features['domain_age']['domain_age_days'] if features['domain_age']['domain_age_days'] != -1 else 'Unknown'],
-            ['Is Shortened URL', 'Yes' if features['shortener']['is_shortened'] else 'No']
-        ]
-        pdf.create_table(security_headers, security_data, [80, 110])
-
-        # VirusTotal Results Table
-        pdf.section_title('VirusTotal Analysis')
-        vt_headers = ['Category', 'Count']
-        
-        # Check if VirusTotal results are valid, otherwise fallback to realistic values based on calculated risk score
-        vt_info = features.get('virus_total')
-        if not isinstance(vt_info, dict) or 'error' in vt_info or vt_info.get('total', 0) == 0:
-            if risk_score >= 70:
-                malicious = int(risk_score * 0.6)
-                suspicious = int((100 - risk_score) * 0.1) + 2
-                harmless = int((100 - risk_score) * 0.2) + 3
-                undetected = 90 - malicious - suspicious - harmless
-            elif risk_score >= 40:
-                malicious = int(risk_score * 0.4)
-                suspicious = int(risk_score * 0.1) + 1
-                harmless = 35
-                undetected = 90 - malicious - suspicious - harmless
-            else:
-                malicious = 0
-                suspicious = 0
-                harmless = 75
-                undetected = 15
-            
-            vt_data = [
-                ['Malicious', malicious],
-                ['Suspicious', suspicious],
-                ['Harmless', harmless],
-                ['Undetected', undetected],
-                ['Timeout', 0],
-                ['Total Scans', 90]
-            ]
-        else:
-            vt_data = [
-                ['Malicious', vt_info.get('malicious', 0)],
-                ['Suspicious', vt_info.get('suspicious', 0)],
-                ['Harmless', vt_info.get('harmless', 0)],
-                ['Undetected', vt_info.get('undetected', 0)],
-                ['Timeout', vt_info.get('timeout', 0)],
-                ['Total Scans', vt_info.get('total', 0)]
-            ]
-        pdf.create_table(vt_headers, vt_data, [80, 110])
-
-        # Generate PDF
-        try:
-            pdf_output = pdf.output(dest='S').encode('latin-1', errors='ignore')
-            buffer = io.BytesIO(pdf_output)
-            buffer.seek(0)
-            
-            return send_file(
-                buffer,
-                mimetype='application/pdf',
-                as_attachment=True,
-                download_name='security_report.pdf'
-            )
-        except Exception as e:
-            print(f"PDF Generation Error: {str(e)}")
-            return jsonify({"error": "Failed to generate PDF report"}), 500
-
-    except Exception as e:
-        print(f"Report Generation Error: {str(e)}")
-        return jsonify({"error": "Failed to process report request"}), 500
 
 @app.route('/crawler')
 def crawler():
-    return render_template('crawler.html')
+    return render_template('crawler.html', socketio_enabled=socketio is not None)
 
-def check_content(url):
-    try:
-        return {
-            'content_length': 0,  # Example result
-            'has_forms': False,   # Example result
-            'has_javascript': False  # Example result
-        }
-    except Exception as e:
-        print(f"Error checking content for {url}: {str(e)}")
-        return {}
-
-def analyze_url_parallel(url):
-    try:
-        features = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            # Run DNS, SSL, and content checks in parallel
-            dns_future = executor.submit(check_dns, url)
-            ssl_future = executor.submit(check_ssl, url)
-            content_future = executor.submit(check_content, url)
-            
-            features.update(dns_future.result())
-            features.update(ssl_future.result())
-            features.update(content_future.result())
-        
-        return features
-    except Exception as e:
-        print(f"Error analyzing URL {url}: {str(e)}")
-        return {}
-
-@app.route('/extract_features', methods=['POST'])
-def extract_features():
-    data = request.json
-    if not data or not isinstance(data, dict):
-        return jsonify({"error": "Invalid JSON format."}), 400
-    url = data.get('url', '')
-    title = data.get('title', '')
-    content = data.get('content', '')
-    is_phishing = data.get('is_phishing', '0')
-    
-    if not all(isinstance(x, str) for x in [url, title, content, is_phishing]):
-        return jsonify({"error": "Invalid input format. All fields must be strings."}), 400
-    
-    # Use parallel processing for URL analysis
-    features = analyze_url_parallel(url)
-    
-    # Store in mock database for local in-memory persistence fallback
-    scan_result = {
-        "url": url,
-        "title": title,
-        "is_phishing": is_phishing == '1',
-        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        "risk_score": 80 if is_phishing == '1' else 15
-    }
-    mock_db.append(scan_result)
-
-    # Directly save to MongoDB if connected, bypassing the queue since background threads
-    # do not run continuously in serverless hostings like Vercel.
-    if db is not None:
-        try:
-            db.bank_websites.insert_one({
-                "url": url,
-                "title": title,
-                "is_phishing": is_phishing,
-                "crawled_at": datetime.now(),
-                "confidence_score": 80 if is_phishing == '1' else 15
-            })
-        except Exception as e:
-            print(f"Error storing crawled result in MongoDB: {e}")
-            
-    # Also push to queue (for background thread fallback if running on a stateful server)
-    try:
-        crawl_results.put({
-            'url': url,
-            'title': title,
-            'is_phishing': is_phishing,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'features': features
-        })
-    except Exception as e:
-        print(f"Error pushing to queue: {e}")
-    
-    # Emit the result via WebSocket
-    socketio.emit('crawl_result', {
-        'url': url,
-        'title': title,
-        'is_phishing': is_phishing,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'features': features
-    })
-    
-    return jsonify({'status': 'success'})
-
-def get_cached_result(url):
-    """Get cached scan result from database if available"""
-    if not isinstance(url, str):
-        return None
-    try:
-        # Check MongoDB first
-        if db is not None:
-            cached_result = db.bank_websites.find_one({"url": url})
-            if cached_result:
-                return {
-                    "url": url,
-                    "features": {
-                        "url_features": None,
-                        "content_features": None,
-                        "domain_features": None,
-                        "redirection_count": None,
-                        "certificate_info": None,
-                        "domain_age": None,
-                        "dns_record_count": None,
-                        "check_spf_dmarc": None,
-                        "is_shortened_url": None,
-                        "virus_total": None,
-                        "google_safe_browsing": None
-                    },
-                    "risk_score": cached_result.get("confidence_score", 0),
-                    "verdict": (
-                        "Highly suspicious ⚠" if cached_result.get("confidence_score", 0) >= 70 else
-                        "Moderately suspicious ⚠" if cached_result.get("confidence_score", 0) >= 40 else
-                        "Likely safe ✅ (Still verify manually)"
-                    ),
-                    "cached": True,
-                    "cached_at": cached_result.get("crawled_at", datetime.now()).strftime('%Y-%m-%d %H:%M:%S')
-                }
-        
-        # Check mock database if MongoDB is not available
-        for entry in mock_db:
-            if entry["url"] == url:
-                return {
-                    "url": url,
-                    "features": {
-                        "url_features": None,
-                        "content_features": None,
-                        "domain_features": None,
-                        "redirection_count": None,
-                        "certificate_info": None,
-                        "domain_age": None,
-                        "dns_record_count": None,
-                        "check_spf_dmarc": None,
-                        "is_shortened_url": None,
-                        "virus_total": None,
-                        "google_safe_browsing": None
-                    },
-                    "risk_score": entry.get("risk_score", 0),
-                    "verdict": (
-                        "Highly suspicious ⚠" if entry.get("risk_score", 0) >= 70 else
-                        "Moderately suspicious ⚠" if entry.get("risk_score", 0) >= 40 else
-                        "Likely safe ✅ (Still verify manually)"
-                    ),
-                    "cached": True,
-                    "cached_at": entry.get("timestamp", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                }
-        
-        return None
-    except Exception as e:
-        print(f"Error checking cache: {str(e)}")
-        return None
-
-@app.route('/scan', methods=['POST'])
-def scan():
-    try:
-        data = request.get_json()
-        if not data or not isinstance(data, dict):
-            return jsonify({"error": "Invalid JSON format."}), 400
-
-        url = data.get("url", "")
-        if not url:
-            return jsonify({"error": "No URL provided."}), 400
-
-        if not isinstance(url, str):
-            return jsonify({"error": "Invalid URL format."}), 400
-
-        if not url.startswith(('http://', 'https://')):
-            url = f'https://{url}'
-
-        # Check for cached result first
-        cached_result = get_cached_result(url)
-        if cached_result:
-            return jsonify(cached_result)
-
-        # If no cached result, proceed with scanning
-        result = process_url(url)
-        if "error" in result:
-            return jsonify(result), 500
-        return jsonify(result)
-
-    except Exception as e:
-        print(f"Scan error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/dashboard')
-def dashboard():
-    try:
-        if db is None:
-            # If MongoDB is not available, use mock data
-            total_sites = len(mock_db)
-            safe_sites = sum(1 for site in mock_db if not site.get('is_phishing', False))
-            phishing_sites = sum(1 for site in mock_db if site.get('is_phishing', False))
-            phishing_rate = round((phishing_sites / total_sites * 100) if total_sites > 0 else 0, 2)
-
-            # Get top phishing domains from mock data
-            top_phishing_domains = [
-                {
-                    'url': site['url'],
-                    'detection_date': site.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-                    'confidence_score': site.get('risk_score', 0)
-                }
-                for site in mock_db if site.get('is_phishing', False)
-            ][:10]
-
-            # Get recent activity from mock data
-            recent_activity = [
-                {
-                    'url': site['url'],
-                    'timestamp': site.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-                    'is_phishing': bool(site.get('is_phishing', False)),  # Convert to boolean
-                    'title': site.get('title', '')
-                }
-                for site in mock_db[-10:]
-            ]
-
-        else:
-            # Get total counts from MongoDB
-            total_sites = db.bank_websites.count_documents({})
-            safe_sites = db.bank_websites.count_documents({"is_phishing": "0"})
-            phishing_sites = db.bank_websites.count_documents({"is_phishing": "1"})
-            phishing_rate = round((phishing_sites / total_sites * 100) if total_sites > 0 else 0, 2)
-
-            # Get top phishing domains
-            top_phishing_domains = list(db.bank_websites.find(
-                {"is_phishing": "1"},
-                {"url": 1, "crawled_at": 1, "confidence_score": 1, "_id": 0}
-            ).sort("confidence_score", -1).limit(10))
-
-            # Get recent activity and convert is_phishing to boolean
-            recent_activity = []
-            for doc in db.bank_websites.find(
-                {},
-                {"url": 1, "crawled_at": 1, "is_phishing": 1, "title": 1, "_id": 0}
-            ).sort("crawled_at", -1).limit(10):
-                recent_activity.append({
-                    'url': doc['url'],
-                    'timestamp': doc['crawled_at'].strftime('%Y-%m-%d %H:%M:%S'),
-                    'is_phishing': doc['is_phishing'] == "1",  # Convert to boolean
-                    'title': doc.get('title', '')
-                })
-
-        # Get daily trends for the last 7 days
-        dates = []
-        safe_trend = []
-        phishing_trend = []
-        
-        for i in range(6, -1, -1):
-            date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
-            dates.append(date)
-            
-            start_of_day = datetime.strptime(date, '%Y-%m-%d')
-            end_of_day = start_of_day + timedelta(days=1)
-            
-            if db is None:
-                # Calculate trends from mock data
-                safe_count = sum(1 for site in mock_db 
-                               if not site.get('is_phishing', False) 
-                               and datetime.strptime(site.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')), 
-                                                   '%Y-%m-%d %H:%M:%S').date() == start_of_day.date())
-                phishing_count = sum(1 for site in mock_db 
-                                   if site.get('is_phishing', False) 
-                                   and datetime.strptime(site.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')), 
-                                                       '%Y-%m-%d %H:%M:%S').date() == start_of_day.date())
-            else:
-                # Calculate trends from MongoDB
-                safe_count = db.bank_websites.count_documents({
-                    "is_phishing": "0",
-                    "crawled_at": {"$gte": start_of_day, "$lt": end_of_day}
-                })
-                
-                phishing_count = db.bank_websites.count_documents({
-                    "is_phishing": "1",
-                    "crawled_at": {"$gte": start_of_day, "$lt": end_of_day}
-                })
-            
-            safe_trend.append(safe_count)
-            phishing_trend.append(phishing_count)
-
-        return render_template('dashboard.html',
-                             total_sites=total_sites,
-                             safe_sites=safe_sites,
-                             phishing_sites=phishing_sites,
-                             phishing_rate=phishing_rate,
-                             top_phishing_domains=top_phishing_domains,
-                             recent_activity=recent_activity,
-                             dates=dates,
-                             safe_trend=safe_trend,
-                             phishing_trend=phishing_trend)
-
-    except Exception as e:
-        print(f"Dashboard Error: {e}")
-        return render_template('dashboard.html',
-                             total_sites=0,
-                             safe_sites=0,
-                             phishing_sites=0,
-                             phishing_rate=0,
-                             top_phishing_domains=[],
-                             recent_activity=[],
-                             dates=[],
-                             safe_trend=[],
-                             phishing_trend=[])
 
 @app.route('/learn')
 def learn():
     return render_template('learn.html')
 
-@app.route('/bulk_scan', methods=['POST'])
-def bulk_scan():
-    try:
-        data = request.get_json()
-        if not data or not isinstance(data, dict):
-            return jsonify({"error": "Invalid JSON format."}), 400
-
-        urls = data.get("urls", [])
-        if not urls:
-            return jsonify({"error": "No URLs provided."}), 400
-
-        if not isinstance(urls, list):
-            return jsonify({"error": "URLs must be a list."}), 400
-
-        if not all(isinstance(url, str) for url in urls):
-            return jsonify({"error": "All URLs must be strings."}), 400
-
-        results = []
-        errors = []
-        cached_count = 0
-
-        # Process URLs in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            # Create a list of futures for each URL
-            futures = []
-            for url in urls:
-                if not url.startswith(('http://', 'https://')):
-                    url = f'https://{url}'
-                
-                # Check cache first
-                cached_result = get_cached_result(url)
-                if cached_result:
-                    results.append(cached_result)
-                    cached_count += 1
-                    continue
-                
-                futures.append(executor.submit(process_url, url))
-
-            # Process results as they complete
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    result = future.result()
-                    if "error" in result:
-                        errors.append(result)
-                    else:
-                        results.append(result)
-                except Exception as e:
-                    errors.append({"url": url, "error": str(e)})
-
-        return jsonify({
-            "results": results,
-            "errors": errors,
-            "total_scanned": len(urls),
-            "successful_scans": len(results),
-            "failed_scans": len(errors),
-            "cached_results": cached_count,
-            "new_scans": len(results) - cached_count,
-            "suspicious_count": sum(1 for r in results if r['risk_score'] >= 40),
-            "safe_count": sum(1 for r in results if r['risk_score'] < 40)
-        })
-
-    except Exception as e:
-        print(f"Bulk scan error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-def process_url(url):
-    try:
-        # Check if URL points to a file
-        file_extensions = ['.pdf', '.doc', '.docx', '.txt', '.xls', '.xlsx', '.zip', '.rar']
-        is_file_url = any(url.lower().endswith(ext) for ext in file_extensions)
-        
-        if is_file_url:
-            return {
-                "url": url,
-                "features": {
-                    "url_features": {"is_file_url": True, "file_type": url.split('.')[-1].lower()},
-                    "content_features": None,
-                    "domain_features": None,
-                    "redirection_count": 0,
-                    "certificate_info": None,
-                    "domain_age": None,
-                    "dns_record_count": 0,
-                    "check_spf_dmarc": None,
-                    "is_shortened_url": False,
-                    "virus_total": None,
-                    "google_safe_browsing": None
-                },
-                "risk_score": 30,  # Moderate risk for direct file downloads
-                "verdict": "Direct file URL ⚠ (Verify source before downloading)"
-            }
-
-        # Extract all features and calculate risk score
-        features = analyze_url(url)
-        risk_score = calculate_risk_score(features)
-        is_phishing = risk_score >= 40
-
-        # Store in mock database
-        mock_db.append({
-            "url": url,
-            "title": url,
-            "is_phishing": is_phishing,
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "risk_score": risk_score
-        })
-
-        # Store in MongoDB if available
-        if db is not None:
-            try:
-                db.bank_websites.insert_one({
-                    "url": url,
-                    "title": url,
-                    "is_phishing": "1" if is_phishing else "0",
-                    "crawled_at": datetime.now(),
-                    "confidence_score": risk_score
-                })
-            except Exception as e:
-                print(f"Error storing in MongoDB: {e}")
-
-        return {
-            "url": url,
-            "features": features,
-            "risk_score": risk_score,
-            "verdict": (
-                "Highly suspicious ⚠" if risk_score >= 70 else
-                "Moderately suspicious ⚠" if risk_score >= 40 else
-                "Likely safe ✅ (Still verify manually)"
-            )
-        }
-    except Exception as e:
-        return {"url": url, "error": str(e)}
-
-def background_processor():
-    batch_size = 10
-    batch = []
-    
-    while True:
-        try:
-            # Get result from queue with timeout
-            result = crawl_results.get(timeout=1)
-            batch.append(result)
-            
-            # Process batch if it reaches the size limit
-            if len(batch) >= batch_size:
-                process_batch(batch)
-                batch = []
-                
-        except queue.Empty:
-            # Process any remaining items in batch
-            if batch:
-                process_batch(batch)
-                batch = []
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"Error in background processor: {str(e)}")
-            time.sleep(1)
-
-def process_batch(batch):
-    try:
-        with get_db_connection() as db:
-            # Convert batch to MongoDB documents
-            documents = [{
-                'url': item['url'],
-                'title': item['title'],
-                'is_phishing': item['is_phishing'],
-                'timestamp': item['timestamp']
-            } for item in batch]
-            
-            # Batch insert into MongoDB
-            if documents:
-                db.bank_websites.insert_many(documents)
-            
-    except Exception as e:
-        print(f"Error processing batch: {str(e)}")
-
-# Add this to your existing configuration
-UPLOAD_FOLDER = '/tmp' if os.environ.get('VERCEL') else 'uploads'
-ALLOWED_EXTENSIONS = {'apk', 'pdf'}
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB limit
-app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(24)
-
-# Create uploads folder if it doesn't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/apk_analyzer')
 def apk_analyzer():
-    return render_template('apk_analyzer.html')
+    return render_template('apk_analyzer.html', upload_limit_mb=4 if SERVERLESS else 16)
+
+
+@app.route('/pdf_analyzer')
+def pdf_analyzer():
+    return render_template('pdf_analyzer.html', upload_limit_mb=4 if SERVERLESS else 16)
+
+
+@app.route('/api/capabilities')
+def capabilities():
+    ai_mode = os.getenv('AI_PROVIDER', 'auto').strip().lower()
+    ai_configured = (ai_mode in {'auto', 'groq'} and bool(configured_key('GROQ_API_KEY'))) or (ai_mode in {'auto', 'openai'} and bool(configured_key('OPENAI_API_KEY'))) or (ai_mode in {'auto', 'ollama'} and bool(os.getenv('OLLAMA_MODEL')))
+    return jsonify(socketio=socketio is not None, storage=store.mode, serverless=SERVERLESS,
+                   virustotal_configured=bool(configured_key('VIRUSTOTAL_API_KEY')),
+                   safe_browsing_configured=bool(configured_key('SAFE_BROWSING_API_KEY')),
+                   ai_configured=bool(ai_configured), ai_provider=ai_mode, bulk_limit=2 if SERVERLESS else 10,
+                   upload_limit_mb=4 if SERVERLESS else 16, production_issues=production_issues() if SERVERLESS else [])
+
+
+@app.route('/api/readiness')
+def readiness():
+    issues = production_issues(check_connection=True)
+    ai_mode = os.getenv('AI_PROVIDER', 'auto').strip().lower()
+    if not ((ai_mode in {'auto', 'groq'} and configured_key('GROQ_API_KEY')) or (ai_mode in {'auto', 'openai'} and configured_key('OPENAI_API_KEY')) or (ai_mode in {'auto', 'ollama'} and os.getenv('OLLAMA_MODEL'))):
+        issues.append('Configure a supported AI provider and server-side key/model.')
+    return jsonify(ready=not issues, issues=issues, storage=store.mode), 503 if issues else 200
+
+
+def get_cached_result(url):
+    return store.cached(normalize_url(url), owner=visitor_id())
+
+
+def process_url(url: str, progress_id=None, force=False, owner=None):
+    url = normalize_url(url)
+    if owner is None:
+        owner = visitor_id()
+    if progress_id is not None and (not isinstance(progress_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{10,100}', progress_id)):
+        raise ScanError('Invalid scan progress identifier.', 'invalid_input')
+    if progress_id is not None:
+        with _socket_lock:
+            if not owner or _socket_owners.get(progress_id) != owner:
+                progress_id = None  # A stale/foreign live connection falls back to HTTP.
+    if SERVERLESS:
+        issues = production_issues()
+        if issues:
+            raise ScanError(' '.join(issues), 'configuration_required')
+    cached = None if force else store.cached(url, owner=owner)
+    if cached:
+        return cached
+    if not scan_slots.acquire(blocking=False):
+        raise ScanError('Scanner is busy. Retry shortly.', 'busy')
+    start = time.monotonic()
+    deadline = start + 48  # Leave room for persistence and response serialization under Vercel's 60s limit.
+    timeline = []
+    def event(stage, status='completed', detail=''):
+        step = {'stage': stage, 'status': status, 'detail': str(detail)[:1000],
+                'timestamp': datetime.now(timezone.utc).isoformat(timespec='milliseconds'), 'elapsed_ms': round((time.monotonic() - start) * 1000)}
+        timeline.append(step)
+        if socketio is not None and progress_id and re.fullmatch(r'[A-Za-z0-9_-]{10,100}', progress_id):
+            socketio.emit('scan_stage', step, to=progress_id)
+    try:
+        event('URL received', detail=url)
+        features = analyze_url(url, event, deadline - 14)
+        risk = assess_risk(features)
+        event('Risk engine calculated', detail=f"{risk['score']}/100; {risk['assessment']}; {len(risk['evidence'])} evidence records")
+        ai = analyze_with_ai(features, risk, deadline)
+        event('AI evidence reasoning', ai['status'], ai.get('reason') or f"{ai['provider']}/{ai['model']}; evidence references validated")
+        if ai['status'] != 'completed':
+            risk['unavailable'].append({'source': 'AI reasoning', 'status': ai['status'], 'reason': ai.get('reason', 'No AI assessment available.')})
+            if risk['state'] == 'completed':
+                risk['state'] = 'partial'
+        event('Final assessment', risk['state'], f"{risk['assessment']}; observed score {risk['score']}/100")
+        result = {'schema_version': SCHEMA_VERSION, 'scan_id': str(uuid.uuid4()), 'url': url,
+                  'timestamp': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'title': features.get('content', {}).get('title') or url,
+                  'features': features, 'risk_score': risk['score'], 'severity': risk['severity'], 'assessment': risk['assessment'],
+                  'verdict': risk['assessment'] + (' - analysis incomplete' if risk['state'] != 'completed' else ''),
+                  'state': risk['state'], 'recommendation': risk['recommendation'], 'score_note': risk['score_note'],
+                  'is_phishing': risk['score'] >= 30, 'evidence': risk['evidence'], 'unavailable': risk['unavailable'],
+                  'phishing_dna': risk['dna'], 'attack_surface': attack_surface(features), 'threat_graph': relationship_graph(features, risk),
+                  'timeline': timeline, 'ai': ai, 'cached': False, 'duration_ms': round((time.monotonic() - start) * 1000)}
+        store.save(result, owner=owner)
+        return result
+    finally:
+        scan_slots.release()
+
+
+@app.route('/scan', methods=['POST'])
+@app.route('/index', methods=['POST'])
+@app.route('/extract_features', methods=['POST'])
+def scan():
+    try:
+        data = json_body()
+        # Deliberately ignore title/content/is_phishing/security scores from clients.
+        result = process_url(data.get('url'), data.get('progress_id'), force=data.get('force') is True)
+        return jsonify(result)
+    except ScanError as error:
+        if error.code == 'busy':
+            return jsonify(error=str(error), code='busy'), 429
+        return scan_error_response(error)
+
+
+@app.route('/bulk_scan', methods=['POST'])
+def bulk_scan():
+    try:
+        data = json_body()
+        urls = data.get('urls')
+        limit = 2 if SERVERLESS else 10
+        if not isinstance(urls, list) or not urls or len(urls) > limit or not all(isinstance(u, str) for u in urls):
+            raise ScanError(f'Provide a list of 1-{limit} URL strings.', 'invalid_input')
+        def one(url):
+            try:
+                return process_url(url, force=data.get('force') is True, owner=owner), None
+            except ScanError as error:
+                return None, {'url': url[:4096], 'error': str(error), 'code': error.code}
+            except Exception:
+                log.exception('Bulk URL analysis failed')
+                return None, {'url': url[:4096], 'error': 'Unexpected scan error.', 'code': 'server_error'}
+        results, errors = [], []
+        owner = visitor_id()  # Flask's request context is not available inside worker threads.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            # map preserves input order; each scan owns its evidence and bounded time budget.
+            for result, error in executor.map(one, urls):
+                if result:
+                    results.append(result)
+                else:
+                    errors.append(error)
+        cached = sum(bool(r['cached']) for r in results)
+        return jsonify(results=results, errors=errors, total_scanned=len(urls), successful_scans=len(results), failed_scans=len(errors),
+                       cached_results=cached, new_scans=len(results) - cached, suspicious_count=sum(r['risk_score'] >= 30 for r in results),
+                       safe_count=sum(r['assessment'] in {'SAFE', 'LOW'} and r['features']['content']['status'] in {'completed', 'partial'} for r in results),
+                       partial_count=sum(r['state'] != 'completed' for r in results))
+    except ScanError as error:
+        return scan_error_response(error)
+
+
+@app.route('/get_data')
+def get_data():
+    return jsonify(data=[summary(r) for r in reversed(store.summaries(visitor_id(), 50))], storage=store.mode, message='Actual scans for this browser session')
+
+
+@app.route('/crawl', methods=['POST'])
+def crawl_site():
+    try:
+        data = json_body()
+        if SERVERLESS and data.get('follow_links') is True:
+            raise ScanError('Linked-page crawling requires a persistent local/server deployment. Vercel analyzes one submitted page per request.', 'serverless_limit')
+        seed = process_url(data.get('url'), data.get('progress_id'), force=data.get('force') is True)
+        results, errors = [seed], []
+        if data.get('follow_links') is True:
+            final = seed['features']['http'].get('final_url') or seed['url']
+            seen = {seed['url'], final}
+            selected = []
+            for link in seed['features']['content'].get('links', []):
+                if link['scheme'] not in {'http', 'https'} or not same_site(link['hostname'], urlsplit(final).hostname):
+                    continue
+                try:
+                    url = normalize_url(link['url'])
+                except ScanError:
+                    continue
+                # Avoid automatic submission/search/logout endpoints and arbitrary query URLs.
+                if url in seen or urlsplit(url).query or re.search(r'(?:logout|signout|delete|unsubscribe)', urlsplit(url).path, re.I):
+                    continue
+                seen.add(url)
+                selected.append(url)
+                if len(selected) == 2:
+                    break
+            for url in selected:
+                try:
+                    results.append(process_url(url, data.get('progress_id')))
+                except ScanError as error:
+                    errors.append({'url': url, 'error': str(error), 'code': error.code})
+        return jsonify(results=results, errors=errors, followed_pages=len(results) - 1, serverless=SERVERLESS)
+    except ScanError as error:
+        return scan_error_response(error)
+
+
+@app.route('/api/scans/<scan_id>')
+def stored_scan(scan_id):
+    if not re.fullmatch(r'[a-f0-9-]{36}', scan_id):
+        return jsonify(error='Invalid scan ID.'), 400
+    result = store.get(scan_id, owner=visitor_id())
+    return jsonify(result) if result else (jsonify(error='Scan result not found or no longer available.'), 404)
+
+
+@app.route('/download_report', methods=['GET', 'POST'])
+def download_report():
+    try:
+        data = dict(request.args) if request.method in {'GET', 'HEAD'} else json_body()
+        if isinstance(data.get('scan_id'), str):
+            result = store.get(data['scan_id'], owner=visitor_id())
+        elif isinstance(data.get('url'), str):
+            result = store.latest_url(normalize_url(data['url']), owner=visitor_id())
+        else:
+            raise ScanError('Provide the completed scan ID.', 'invalid_input')
+        if result is None:
+            return jsonify(error='Stored scan not found. Complete a scan before downloading its report.', code='scan_not_found'), 409
+        if request.method == 'HEAD':
+            return '', 200, {'Content-Type': 'application/pdf'}
+        return send_file(build_report(result), mimetype='application/pdf', as_attachment=True, download_name=f"phish-x-ai-{result['scan_id'][:8]}.pdf")
+    except ScanError as error:
+        return scan_error_response(error)
+
+
+@app.route('/dashboard')
+def dashboard():
+    records = store.summaries(visitor_id(), 10000)
+    safe = [r for r in records if r['assessment'] in {'SAFE', 'LOW'} and r['content_status'] in {'completed', 'partial'}]
+    suspicious = [r for r in records if r['risk_score'] >= 30]
+    dates = [(datetime.now(timezone.utc) - timedelta(days=i)).date().isoformat() for i in range(6, -1, -1)]
+    return render_template('dashboard.html', total_sites=len(records), safe_sites=len(safe), phishing_sites=len(suspicious),
+                           unknown_sites=len(records) - len(safe) - len(suspicious), partial_sites=sum(r['state'] != 'completed' for r in records),
+                           phishing_rate=round(100 * len(suspicious) / len(records), 1) if records else 0,
+                           top_phishing_domains=[{'url': r['url'], 'detection_date': r['timestamp'], 'confidence_score': r['risk_score'], 'assessment': r['assessment']} for r in sorted(suspicious, key=lambda r: r['risk_score'], reverse=True)[:10]],
+                           recent_activity=[{**summary(r), 'details': r['state']} for r in records[:10]], dates=dates,
+                           safe_trend=[sum(r['timestamp'].startswith(day) for r in safe) for day in dates],
+                           phishing_trend=[sum(r['timestamp'].startswith(day) for r in suspicious) for day in dates], storage_mode=store.mode)
+
+
+def analyze_upload(kind):
+    if not upload_slots.acquire(blocking=False):
+        return jsonify(error='File analyzer is busy. Retry shortly.', code='busy'), 429
+    try:
+        return _analyze_upload(kind)
+    finally:
+        upload_slots.release()
+
+
+def _analyze_upload(kind):
+    file = request.files.get(kind)
+    if file is None or not file.filename:
+        return jsonify(error=f'Select a {kind.upper()} file.'), 400
+    if not file.filename.lower().endswith('.' + kind):
+        return jsonify(error=f'Only .{kind} files are accepted by this analyzer.'), 400
+    # Unique temporary directory per request; never reuse user-controlled filenames.
+    with tempfile.TemporaryDirectory(prefix='phish-x-', dir='/tmp') as directory:
+        path = Path(directory) / ('upload.' + kind)
+        file.save(path)
+        with path.open('rb') as stream:
+            magic = stream.read(8)
+        if not path.stat().st_size or (kind == 'pdf' and not magic.startswith(b'%PDF-')) or (kind == 'apk' and not magic.startswith(b'PK')):
+            return jsonify(error='File content does not match the selected file type.'), 400
+        try:
+            worker = subprocess.run([sys.executable, str(Path(__file__).parent / 'file_analysis.py'), kind, str(path)], capture_output=True, text=True, timeout=16)
+            if worker.returncode < 0:
+                return jsonify(error='File analysis exceeded its resource limits.', code='resource_limit', status='partial'), 422
+            data = json.loads(worker.stdout)
+            if worker.returncode:
+                return jsonify(data), 503 if data.get('code') == 'dependency_unavailable' else 422
+            return jsonify(data)
+        except subprocess.TimeoutExpired:
+            return jsonify(error='File analysis exceeded its processing time limit.', code='timeout', status='timeout'), 408
+        except (OSError, ValueError):
+            log.warning('Upload worker unavailable or returned invalid output')
+            return jsonify(error='File analyzer is unavailable in this deployment.', code='analyzer_unavailable'), 503
+
 
 @app.route('/analyze_apk', methods=['POST'])
 def analyze_apk():
-    print("APK analysis request received")
-    if 'apk' not in request.files:
-        print("No file part in request")
-        return jsonify({'error': 'No file part'}), 400
-    
-    file = request.files['apk']
-    if file.filename == '':
-        print("No selected file")
-        return jsonify({'error': 'No selected file'}), 400
-    
-    print(f"Received file: {file.filename}")
-    
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        print(f"Saving file to: {filepath}")
-        file.save(filepath)
-        
-        try:
-            print("Starting APK analysis")
-            # Analyze APK
-            from androguard.core.bytecodes.apk import APK
-            from androguard.core.bytecodes.dvm import DalvikVMFormat
-            from androguard.core.analysis.analysis import Analysis
-            a = APK(filepath)
-            print("APK loaded successfully")
-            d = DalvikVMFormat(a.get_dex())
-            dx = Analysis(d)
-            print("DEX analysis completed")
-            
-            # Basic Information
-            basic_info = {
-                'Package Name': a.get_package(),
-                'Version Name': a.get_androidversion_name(),
-                'Version Code': a.get_androidversion_code(),
-                'Min SDK': a.get_min_sdk_version(),
-                'Target SDK': a.get_target_sdk_version(),
-                'Permissions': len(a.get_permissions())
-            }
-            print(f"Basic info extracted: {basic_info}")
-            
-            # Permissions
-            permissions = a.get_permissions()
-            print(f"Found {len(permissions)} permissions")
-            
-            # Security Analysis
-            security_analysis = []
-            
-            # Check for dangerous permissions
-            dangerous_permissions = [
-                'android.permission.READ_SMS',
-                'android.permission.SEND_SMS',
-                'android.permission.READ_CONTACTS',
-                'android.permission.ACCESS_FINE_LOCATION',
-                'android.permission.CAMERA',
-                'android.permission.RECORD_AUDIO'
-            ]
-            
-            for perm in dangerous_permissions:
-                if perm in permissions:
-                    security_analysis.append(f"Uses dangerous permission: {perm}")
-            
-            # Check for network security
-            if 'android.permission.INTERNET' in permissions:
-                security_analysis.append("App has internet access")
-            
-            # Check for backup and debuggable using manifest XML
-            manifest = a.get_android_manifest_xml()
-            if manifest is not None:
-                # Register the android namespace
-                ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
-                
-                # Check for backup
-                backup_elem = manifest.find(".//application[@android:allowBackup='true']", 
-                                         namespaces={'android': 'http://schemas.android.com/apk/res/android'})
-                if backup_elem is not None:
-                    security_analysis.append("App allows backup (potential security risk)")
-                
-                # Check for debuggable
-                debug_elem = manifest.find(".//application[@android:debuggable='true']",
-                                        namespaces={'android': 'http://schemas.android.com/apk/res/android'})
-                if debug_elem is not None:
-                    security_analysis.append("App is debuggable (security risk)")
-            
-            # Potential Risks
-            risks = []
-            
-            # Check for suspicious activities
-            suspicious_activities = [
-                'android.intent.action.SEND',
-                'android.intent.action.VIEW',
-                'android.intent.action.EDIT'
-            ]
-            
-            for activity in a.get_activities():
-                for sus_act in suspicious_activities:
-                    if sus_act in activity:
-                        risks.append(f"Suspicious activity found: {activity}")
-            
-            # Check for native code
-            if a.get_libraries():
-                risks.append("App contains native code (potential security risk)")
-            
-            # Additional security checks
-            try:
-                # Check for exported activities
-                exported_activities = a.get_exported_activities()
-                if exported_activities:
-                    security_analysis.append(f"App has {len(exported_activities)} exported activities")
-                
-                # Check for exported services
-                exported_services = a.get_exported_services()
-                if exported_services:
-                    security_analysis.append(f"App has {len(exported_services)} exported services")
-                
-                # Check for exported receivers
-                exported_receivers = a.get_exported_receivers()
-                if exported_receivers:
-                    security_analysis.append(f"App has {len(exported_receivers)} exported receivers")
-            except:
-                pass  # Skip if methods not available
-            
-            print("Analysis completed, cleaning up")
-            # Clean up
-            os.remove(filepath)
-            
-            result = {
-                'basic_info': basic_info,
-                'permissions': permissions,
-                'security_analysis': security_analysis,
-                'risks': risks
-            }
-            print(f"Returning result: {result}")
-            return jsonify(result)
-            
-        except Exception as e:
-            print(f"Error during APK analysis: {str(e)}")
-            if os.path.exists(filepath):
-                os.remove(filepath)
-            return jsonify({'error': str(e)}), 500
-    
-    print("Invalid file type")
-    return jsonify({'error': 'Invalid file type'}), 400
-    
-@app.route('/pdf_analyzer')
-def pdf_analyzer():
-    return render_template('pdf_analyzer.html')
+    return analyze_upload('apk')
+
 
 @app.route('/analyze_pdf', methods=['POST'])
 def analyze_pdf():
-    print("PDF analysis request received")
-    if 'pdf' not in request.files:
-        print("No file part in request")
-        return jsonify({'error': 'No file part'}), 400
-    
-    file = request.files['pdf']
-    if file.filename == '':
-        print("No selected file")
-        return jsonify({'error': 'No selected file'}), 400
-    
-    print(f"Received file: {file.filename}")
-    
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        print(f"Saving file to: {filepath}")
-        file.save(filepath)
-        
-        try:
-            print("Starting PDF analysis")
-            import PyPDF2
-            import fitz
-            results = {
-                'basic_info': {},
-                'security_analysis': [],
-                'risks': [],
-                'javascript': [],
-                'actions': [],
-                'metadata': {}
-            }
-            
-            # Basic Information using PyPDF2
-            with open(filepath, 'rb') as pdf_file:
-                pdf_reader = PyPDF2.PdfReader(pdf_file)
-                
-                results['basic_info'] = {
-                    'Pages': len(pdf_reader.pages),
-                    'Encrypted': pdf_reader.is_encrypted,
-                    'File Size': f"{os.path.getsize(filepath) / 1024:.2f} KB"
-                }
-                
-                # Extract metadata
-                if pdf_reader.metadata:
-                    results['metadata'] = {
-                        'Title': pdf_reader.metadata.get('/Title', 'N/A'),
-                        'Author': pdf_reader.metadata.get('/Author', 'N/A'),
-                        'Creator': pdf_reader.metadata.get('/Creator', 'N/A'),
-                        'Producer': pdf_reader.metadata.get('/Producer', 'N/A'),
-                        'Creation Date': pdf_reader.metadata.get('/CreationDate', 'N/A')
-                    }
-            
-            # Detailed Analysis using PyMuPDF
-            doc = fitz.open(filepath)
-            
-            # Check for JavaScript
-            for page in doc:
-                try:
-                    # Get JavaScript actions
-                    js_actions = page.get_js_actions()
-                    if js_actions:
-                        results['javascript'].append(f"Page {page.number + 1} contains JavaScript")
-                except Exception as e:
-                    print(f"Error checking JavaScript on page {page.number + 1}: {str(e)}")
-            
-            # Check for actions and links
-            for page in doc:
-                for link in page.get_links():
-                    if link['kind'] == fitz.LINK_URI:
-                        results['actions'].append(f"Page {page.number + 1}: External link to {link['uri']}")
-                    elif link['kind'] == fitz.LINK_LAUNCH:
-                        results['actions'].append(f"Page {page.number + 1}: Launch action found")
-                    elif link['kind'] == fitz.LINK_GOTOR:
-                        results['actions'].append(f"Page {page.number + 1}: Go-to action found")
-            
-            # Security Analysis
-            if results['javascript']:
-                results['security_analysis'].append("Document contains JavaScript (potential security risk)")
-            
-            if results['actions']:
-                results['security_analysis'].append("Document contains interactive elements")
-            
-            if doc.is_encrypted:
-                results['security_analysis'].append("Document is encrypted")
-            
-            # Check for embedded files
-            for page in doc:
-                for annot in page.annots():
-                    if annot.type[0] == 15:  # File attachment
-                        results['security_analysis'].append(f"Page {page.number + 1}: Contains embedded file")
-            
-            # Check for forms
-            if doc.is_form_pdf:
-                results['security_analysis'].append("Document contains form fields")
-            
-            # Potential Risks
-            if len(results['actions']) > 0:
-                results['risks'].append("Document contains interactive elements that could be malicious")
-            
-            if len(results['javascript']) > 0:
-                results['risks'].append("Document contains JavaScript that could be malicious")
-            
-            if doc.is_encrypted:
-                results['risks'].append("Encrypted document could contain hidden content")
-            
-            # Clean up
-            doc.close()
-            os.remove(filepath)
-            
-            print(f"Analysis completed: {results}")
-            return jsonify(results)
-            
-        except Exception as e:
-            print(f"Error during PDF analysis: {str(e)}")
-            if os.path.exists(filepath):
-                os.remove(filepath)
-            return jsonify({'error': str(e)}), 500
-    
-    print("Invalid file type")
-    return jsonify({'error': 'Invalid file type'}), 400
+    return analyze_upload('pdf')
 
-# Cache DNS results for 1 hour
-@lru_cache(maxsize=1000)
+
+# Compatibility helpers are real; main scan reuses one analysis instead of calling them repeatedly.
+def check_content(url):
+    return extract_content_features(url)
+
+
 def check_dns(url):
-    try:
-        domain = urlparse(url).netloc
-        # Your existing DNS check code
-        return {
-            'dns_record': True,  # Example result
-            'dns_age': 0  # Example result
-        }
-    except Exception as e:
-        print(f"Error checking DNS for {url}: {str(e)}")
-        return {'dns_record': False, 'dns_age': 0}
+    return get_dns_record_count(url)
 
-# Cache SSL results for 1 hour
-@lru_cache(maxsize=1000)
+
 def check_ssl(url):
-    try:
-        # Your existing SSL check code
-        return {
-            'ssl_verified': True,  # Example result
-            'ssl_age': 0  # Example result
-        }
-    except Exception as e:
-        print(f"Error checking SSL for {url}: {str(e)}")
-        return {'ssl_verified': False, 'ssl_age': 0}
+    return get_certificate_info(url)
 
-# Clear cache periodically
-def clear_cache():
-    while True:
-        time.sleep(3600)  # Clear cache every hour
-        check_dns.cache_clear()
-        check_ssl.cache_clear()
+
+def analyze_url_parallel(url):
+    return analyze_url(url)
+
 
 if __name__ == '__main__':
-    # Start background processor
-    processor_thread = threading.Thread(target=background_processor, daemon=True)
-    processor_thread.start()
-
-    # Start cache clearing thread
-    cache_thread = threading.Thread(target=clear_cache, daemon=True)
-    cache_thread.start()
-
-    flask_debug = os.environ.get('FLASK_DEBUG', 'False').lower() in ['true', '1']
-    flask_host = os.environ.get('FLASK_HOST', '127.0.0.1')
-    flask_port = int(os.environ.get('FLASK_PORT', 5001))
-    socketio.run(app, host=flask_host, port=flask_port, debug=flask_debug)
+    config = dict(host=os.getenv('FLASK_HOST', '127.0.0.1'), port=int(os.getenv('FLASK_PORT', '5001')),
+                  debug=os.getenv('FLASK_DEBUG', 'False').lower() in {'true', '1'}, use_reloader=False)
+    if socketio is not None:
+        socketio.run(app, **config, allow_unsafe_werkzeug=True)
+    else:
+        app.run(**config)

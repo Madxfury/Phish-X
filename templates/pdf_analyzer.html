@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF Analyzer - Catch The Phish</title>
+    <title>PDF Analyzer - Phish-X AI</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon1.png') }}">
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;700&display=swap"
         rel="stylesheet">
@@ -212,7 +212,19 @@
                 padding: 1rem;
             }
         }
+
+        /* Targeted responsive fixes for the existing analyzer layout. */
+        .navigation { flex-wrap: wrap; }
+        .result-card, .file-name { overflow-wrap: anywhere; min-width: 0; }
+        @media(max-width:480px) {
+            .upload-section, .results-section, .upload-area { padding: 1rem; }
+            .result-card { padding: 1rem; }
+            .navigation .nav-button { width: 100%; justify-content: center; }
+            .logo { max-width: 100%; }
+        }
+        @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; transition-duration:.01ms!important; animation-iteration-count:1!important; } }
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/focus.css') }}">
 </head>
 
 <body>
@@ -225,12 +237,13 @@
         </header>
 
         <div class="upload-section">
-            <div class="upload-area" id="dropZone">
+            <div class="upload-area" id="dropZone" role="button" tabindex="0" aria-label="Choose file for analysis">
                 <i class="fas fa-file-pdf upload-icon"></i>
                 <p class="upload-text">Drag and drop your PDF file here or click to browse</p>
                 <p class="file-name" id="fileName"></p>
                 <input type="file" class="file-input" id="fileInput" accept=".pdf">
             </div>
+            <p class="upload-text">Static inspection; {{ upload_limit_mb }} MB upload limit. Scripts and apps are not executed.</p>
             <button class="analyze-button" id="analyzeButton" disabled>Analyze PDF</button>
         </div>
 
@@ -307,6 +320,7 @@
             const loading = document.getElementById('loading');
             const results = document.getElementById('results');
 
+            dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
             // Handle drag and drop
             dropZone.addEventListener('dragover', (e) => {
                 e.preventDefault();
@@ -325,7 +339,7 @@
                 dropZone.style.backgroundColor = 'transparent';
 
                 const file = e.dataTransfer.files[0];
-                if (file && file.name.endsWith('.pdf')) {
+                if (file && file.name.toLowerCase().endsWith('.pdf')) {
                     fileInput.files = e.dataTransfer.files;
                     analyzeButton.disabled = false;
 
@@ -346,7 +360,7 @@
             fileInput.addEventListener('change', () => {
                 if (fileInput.files.length > 0) {
                     const file = fileInput.files[0];
-                    if (file.name.endsWith('.pdf')) {
+                    if (file.name.toLowerCase().endsWith('.pdf')) {
                         analyzeButton.disabled = false;
 
                         // Show file name
@@ -369,20 +383,24 @@
 
                 loading.style.display = 'block';
                 results.style.display = 'none';
+                analyzeButton.disabled = true;
 
                 const formData = new FormData();
                 formData.append('pdf', file);
 
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 45000);
                 try {
                     const response = await fetch('/analyze_pdf', {
                         method: 'POST',
-                        body: formData
+                        body: formData,
+                        signal: controller.signal
                     });
 
                     const data = await response.json();
 
-                    if (data.error) {
-                        throw new Error(data.error);
+                    if (!response.ok || data.error) {
+                        throw new Error(data.error || `Request failed (${response.status}).`);
                     }
 
                     // Update results
@@ -393,8 +411,9 @@
                 } catch (error) {
                     console.error('Error:', error);
                     loading.style.display = 'none';
-                    alert(`Error analyzing PDF: ${error.message || 'Unknown error'}`);
+                    alert(`Error analyzing PDF: ${error.name === 'AbortError' ? 'Request timed out. Please retry.' : error.message || 'Unknown error'}`);
                 }
+                finally { clearTimeout(timeout); loading.style.display = 'none'; analyzeButton.disabled = false; }
             });
 
             function escapeHTML(str) {
@@ -427,6 +446,7 @@
                         .map(([key, value]) => `<li><strong>${escapeHTML(key)}:</strong> ${escapeHTML(value)}</li>`)
                         .join('');
 
+                    data.security_analysis = [...(data.security_analysis || []), ...(data.limitations || [])];
                     // Update Security Analysis
                     const securityAnalysis = document.getElementById('securityAnalysis');
                     securityAnalysis.innerHTML = (data.security_analysis || [])

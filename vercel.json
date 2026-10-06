@@ -1,21 +1,10 @@
 {
-  "version": 2,
-  "rewrites": [
-    {
-      "source": "/favicon.ico",
-      "destination": "/static/images/favicon1.png"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/app.py"
-    }
-  ],
-  "env": {
-    "VERCEL": "1"
-  },
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "python prepare_vercel.py",
   "functions": {
     "app.py": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.env*,.venv/**,venv/**,env/**,data/**,tests/**,.pytest_cache/**,myscrappy/**,uploads/**,*.zip,__pycache__/**}"
     }
   }
 }
