@@ -56,6 +56,13 @@ _socket_lock = threading.Lock()
 _socket_owners = {}
 
 
+@app.context_processor
+def performance_context():
+    # Only Production page loads are measured; never local or Preview scans.
+    return {'speed_insights_enabled': SERVERLESS and os.getenv('VERCEL_ENV') == 'production'
+            and os.getenv('SPEED_INSIGHTS_ENABLED', 'true').lower() in {'true', '1'}}
+
+
 def visitor_id():
     if not has_request_context():
         return None  # Internal command-line tests only; HTTP callers always get a scope.

@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>APK Analyzer - Phish-X AI</title>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon1.png') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         * {
@@ -218,13 +218,14 @@
         @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; transition-duration:.01ms!important; animation-iteration-count:1!important; } }
     </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/focus.css') }}">
+    {% include '_performance.html' %}
 </head>
 
 <body>
     <div class="container">
         <header class="header">
             <div class="logo-container">
-                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" class="logo">
+                <img src="{{ url_for('static', filename='images/logo.png') }}" width="1563" height="466" alt="Logo" class="logo">
                 <h1>APK Analyzer</h1>
             </div>
         </header>

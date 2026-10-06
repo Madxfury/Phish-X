@@ -52,17 +52,40 @@ ACTIONS = {"verify_context": "Verify the hostname and context independently befo
 
 
 def evidence_payload(features: dict, risk: dict) -> dict:
-    # Preserve evidence IDs and measured facts. Limit raw source snippets and model context.
+    # Send a compact, valid JSON view; the full evidence ledger stays in storage/UI.
+    # Long CSP strings, repeated page text and source lists consume free-provider
+    # token quotas without improving reasoning about phishing indicators.
+    def compact(value, limit=600, depth=0):
+        if isinstance(value, str):
+            return value if len(value) <= limit else {"excerpt": value[:limit], "truncated": True}
+        if depth >= 4 and isinstance(value, (dict, list)):
+            return {"omitted": True, "reason": "Nested context limit"}
+        if isinstance(value, dict):
+            return {k: compact(v, limit, depth + 1) for k, v in value.items()}
+        if isinstance(value, list):
+            items = [compact(v, limit, depth + 1) for v in value[:8]]
+            return items if len(value) <= 8 else {"items": items, "omitted_items": len(value) - 8}
+        return value
     evidence = []
+    context_chars = 0
+    omitted = 0
     # Keep strong intelligence/form findings in the model context even on form-heavy pages.
     ordered = sorted(risk["evidence"], key=lambda item: item["points"], reverse=True)
     for item in ordered[:70]:
-        detail = json.dumps(item["detail"], ensure_ascii=False)
-        evidence.append({**item, "detail": detail[:2400]})
+        detail = item["detail"]
+        if item['id'] == 'headers.observed' and isinstance(detail, dict):
+            detail = {name: {"present": bool(value)} for name, value in detail.items()}
+        view = {**item, "detail": compact(detail)}
+        size = len(json.dumps(view, ensure_ascii=False))
+        if context_chars + size > 12000:
+            omitted += 1
+            continue
+        evidence.append(view)
+        context_chars += size
     return {"url": features["_original_url"], "deterministic_score": risk["score"], "deterministic_assessment": risk["assessment"],
             "scan_state": risk["state"], "evidence": evidence, "unavailable": risk["unavailable"],
-            "page_text_excerpt_untrusted": features.get("content", {}).get("text_excerpt", "")[:1600],
-            "coverage": "Bounded static HTML/source inspection, not a browser session. Referenced URLs are not evidence of compromise."}
+            "omitted_evidence_records": omitted + max(0, len(ordered) - 70),
+            "coverage": "Bounded static HTML/source inspection, not a browser session. Context excerpts/lists are explicitly sampled; use cited observations only. Full details remain in the scan ledger. Referenced URLs are not evidence of compromise."}
 
 
 def validate_ai_result(data: dict, risk: dict) -> dict:
@@ -146,7 +169,7 @@ def analyze_with_ai(features: dict, risk: dict, deadline: float | None = None) -
         elif provider == "groq":
             body = {
                     "model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": payload}],
-                    "temperature": 0, "reasoning_effort": "low", "max_completion_tokens": 4096,
+                    "temperature": 0, "reasoning_effort": "low", "max_completion_tokens": 2048,
                     "response_format": {"type": "json_schema", "json_schema": {"name": "website_evidence_assessment", "strict": True, "schema": schema}}}
             for attempt in range(2):
                 status, headers, result = api_json("POST", "https://api.groq.com/openai/v1/chat/completions", deadline, read_timeout=12,

@@ -63,3 +63,10 @@ SHA-256 comparison confirmed **all five original PNG assets are byte-for-byte un
 - Existing inline scripts/styles retain CSP `unsafe-inline`; changing that would require a separate template nonce refactor.
 
 See `README.md` for configuration/data flows/Neon setup and `VALIDATION.md` for measured results and remaining external checks.
+
+
+## Production performance follow-up
+
+The merged release is live on phishxai.vercel.app and passed actual Production HTTP, Neon, Groq, VirusTotal, history/report, bulk/crawler and file-worker checks. Initial Groq 429 responses correctly remained unavailable; compact structured context and a smaller completion budget passed three subsequent real cited assessments. Long/duplicated context no longer consumes unnecessary quota, and explicit sampling preserves full stored evidence.
+
+Speed Insights had no events because the templates omitted its collector. Added a Production-only HTML integration with a pre-load privacy filter for known page paths; scan inputs/results never enter events. No React/Next.js, paid Plus tier or new frontend is introduced. Logo dimensions, font preconnections, removal of unused downloads, and pinned/deferred Chart.js address avoidable load/layout risks. New privacy/context-bound regressions pass alongside the original suite. Cold starts, network latency and free provider quotas remain real operating limits.

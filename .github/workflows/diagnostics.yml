@@ -22,3 +22,4 @@ jobs:
       - run: python -m compileall -q app.py features_extract.py secure_fetch.py ai_analysis.py storage.py postgres_store.py risk_engine.py file_analysis.py reports.py threat_intelligence.py
       - run: |
           for file in static/js/*.js; do node --check "$file"; done
+      - run: node --test tests/test_performance.js
