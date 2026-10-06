@@ -22,7 +22,7 @@ SCHEMA_VERSION = 5
 
 def config_fingerprint() -> str:
     names = ("AI_PROVIDER", "GROQ_MODEL", "GROQ_API_KEY", "OPENAI_MODEL", "OPENAI_API_KEY", "OLLAMA_MODEL", "OLLAMA_BASE_URL", "VIRUSTOTAL_API_KEY", "SAFE_BROWSING_API_KEY")
-    material = "phish-x-policy-2026-10-06-v2|" + "|".join(os.getenv(name, "") for name in names)
+    material = "phish-x-policy-2026-10-06-v3|" + "|".join(os.getenv(name, "") for name in names)
     return hashlib.sha256(material.encode()).hexdigest()
 
 

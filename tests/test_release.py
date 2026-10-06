@@ -113,6 +113,55 @@ def test_groq_configuration_change_invalidates_cache_fingerprint(monkeypatch):
     assert config_fingerprint()!=old
 
 
+def test_ai_context_sampling_preserves_citations_and_full_ledger():
+    import copy
+    f=html_features('<title>Controlled context fixture</title><p>'+('Untrusted example text. '*100)+'</p>')
+    f['security_headers']={'content-security-policy':'a'*10000,'x-frame-options':None}
+    risk=assess_risk(f)
+    risk['evidence'].append({'id':'controlled.destinations','label':'Observed destinations','detail':['https://example.com/'+str(i) for i in range(20)],
+                             'source':'Controlled fixture','dimension':'credentials','points':25,'kind':'risk_indicator'})
+    original=copy.deepcopy(risk)
+    payload=ai.evidence_payload(f,risk)
+    assert risk==original  # Sampling cannot alter display/report evidence.
+    assert payload['evidence'][0]['id']=='controlled.destinations'
+    by_id={item['id']:item for item in payload['evidence']}
+    assert by_id['controlled.destinations']['detail']['omitted_items']==12
+    assert by_id['html.text']['detail']['truncated'] is True
+    assert len(by_id['html.text']['detail']['excerpt'])==600
+    assert by_id['headers.observed']['detail']=={'content-security-policy':{'present':True},'x-frame-options':{'present':False}}
+    assert 'a'*1000 not in json.dumps(payload)
+    assert 'page_text_excerpt_untrusted' not in payload  # No duplicate text.
+    assert set(by_id)=={e['id'] for e in risk['evidence']}
+
+
+def test_large_ai_context_is_bounded_and_keeps_priority_evidence():
+    f=html_features('<title>Controlled context bound</title>')
+    risk=assess_risk(f)
+    for i in range(100):
+        risk['evidence'].append({'id':'fixture.'+str(i),'label':'Large sampled observation','source':'Fixture',
+            'detail':{'values':['x'*1000]*30},'dimension':'relationships','points':25 if i==99 else 0,'kind':'observation'})
+    payload=ai.evidence_payload(f,risk)
+    assert payload['evidence'][0]['id']=='fixture.99'
+    assert sum(len(json.dumps(e,ensure_ascii=False)) for e in payload['evidence'])<=12000
+    assert payload['omitted_evidence_records']>0
+
+
+def test_speed_insights_only_renders_on_enabled_production_pages(isolated_app,monkeypatch):
+    client=isolated_app.app.test_client()
+    assert '/static/js/performance.js' not in client.get('/').text
+    monkeypatch.setattr(isolated_app,'SERVERLESS',True)
+    monkeypatch.setenv('VERCEL_ENV','preview')
+    assert '/static/js/performance.js' not in client.get('/').text
+    monkeypatch.setenv('VERCEL_ENV','production')
+    for path in ['/', '/dashboard','/crawler','/apk_analyzer','/pdf_analyzer','/learn']:
+        page=client.get(path)
+        assert page.status_code==200
+        assert '<script defer src="/static/js/performance.js"></script>' in page.text
+        assert 'speed-insights/script.js' not in page.text  # Privacy hook loads first.
+    monkeypatch.setenv('SPEED_INSIGHTS_ENABLED','false')
+    assert '/static/js/performance.js' not in client.get('/').text
+
+
 def test_postgres_connection_cannot_disable_certificate_verification(monkeypatch):
     import certifi
     import postgres_store
